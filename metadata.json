@@ -1,8 +1,7 @@
 {
   "requestFramePermissions": [
-    "camera",
     "microphone"
   ],
   "name": "TURAB' - Elite Card Series",
-  "description": ""
+  "description": "An elite trick-taking card game experience with real-time voice interaction and AI opponents."
 }

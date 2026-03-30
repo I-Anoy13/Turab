@@ -14,6 +14,7 @@ import {
   setDoc, 
   updateDoc 
 } from 'firebase/firestore';
+import { toast, Toaster } from 'sonner';
 import { auth, db } from './firebase';
 import { Card, GameState, Player, Suit, SUITS, RANKS, RANK_VALUES, UserProfile, AppView, GameMode, Friend } from './types';
 import CardComponent from './components/CardComponent';
@@ -187,7 +188,7 @@ const App: React.FC = () => {
         await signInWithEmailAndPassword(auth, loginEmail, loginPass);
       }
     } catch (err: any) {
-      alert(err.message || "Authentication failed.");
+      toast.error(err.message || "Authentication failed.");
     } finally {
       setIsLoggingIn(false);
     }
@@ -264,6 +265,16 @@ const App: React.FC = () => {
     }
 
     if (isConnectingRef.current) return;
+    
+    // Check for API key
+    if (typeof window !== 'undefined' && (window as any).aistudio) {
+      const hasKey = await (window as any).aistudio.hasSelectedApiKey();
+      if (!hasKey) {
+        await (window as any).aistudio.openSelectKey();
+        // Assume success and proceed
+      }
+    }
+
     isConnectingRef.current = true;
 
     try {
@@ -280,7 +291,7 @@ const App: React.FC = () => {
       audioContextsRef.current = { input: inputCtx, output: outputCtx };
       
       const sessionPromise = ai.live.connect({
-        model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+        model: 'gemini-3.1-flash-live-preview',
         callbacks: {
           onopen: () => {
             const source = inputCtx.createMediaStreamSource(stream);
@@ -289,13 +300,23 @@ const App: React.FC = () => {
               if (sessionRef.current) {
                 const inputData = e.inputBuffer.getChannelData(0);
                 const pcmBlob = createBlob(inputData);
-                sessionRef.current.sendRealtimeInput({ media: pcmBlob });
+                sessionRef.current.sendRealtimeInput({ audio: pcmBlob });
               }
             };
             source.connect(scriptProcessor);
             scriptProcessor.connect(inputCtx.destination);
           },
           onmessage: async (message: LiveServerMessage) => {
+            // Handle interruption
+            if (message.serverContent?.interrupted) {
+              sourcesRef.current.forEach(source => {
+                try { source.stop(); } catch (e) {}
+              });
+              sourcesRef.current.clear();
+              nextStartTimeRef.current = 0;
+              return;
+            }
+
             const audioData = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
             if (audioData && audioContextsRef.current) {
               const { output: ctx } = audioContextsRef.current;
@@ -323,7 +344,7 @@ const App: React.FC = () => {
       sessionRef.current = await sessionPromise;
       setIsMicActive(true);
     } catch (err: any) {
-      alert('Microphone access failed.');
+      toast.error('Microphone access failed.');
       await cleanupMic();
     } finally {
       isConnectingRef.current = false;
@@ -348,7 +369,7 @@ const App: React.FC = () => {
   }, [profile.username]);
 
   const startNewGame = useCallback((mode: GameMode, code?: string) => {
-    if (profile.coins < STAKE_AMOUNT) return alert("Insufficient coins.");
+    if (profile.coins < STAKE_AMOUNT) return toast.error("Insufficient coins.");
     const updatedProfile = { ...profile, coins: profile.coins - STAKE_AMOUNT, gamesPlayed: profile.gamesPlayed + 1 };
     setProfile(updatedProfile);
     syncProfileToCloud(updatedProfile);
@@ -472,145 +493,191 @@ const App: React.FC = () => {
     }
   }, [gameState?.currentTrick.length, profile, syncProfileToCloud]);
 
-  if (view === 'login') {
-    return (
-      <div className="h-full w-full flex flex-col items-center justify-center p-8 bg-[#02040a] relative overflow-hidden">
-        <div className="w-full max-w-md z-10 space-y-12 text-center">
-          <h1 className="text-6xl md:text-8xl turab-title font-black italic">TURAB'</h1>
-          <div className="glass-panel p-10 rounded-[2.5rem] border-white/10 shadow-2xl">
-            <h2 className="text-xl font-black uppercase tracking-widest mb-8 text-white/80">Authorize Access</h2>
+  const renderView = () => {
+    if (view === 'searching') {
+      return (
+        <div className="h-full w-full flex flex-col items-center justify-center bg-[#02040a] p-8">
+          <div className="w-32 h-32 rounded-full border-t-2 border-indigo-500 animate-spin mb-8"></div>
+          <h2 className="text-2xl font-black uppercase tracking-widest animate-pulse">Searching for Match...</h2>
+          <p className="text-white/20 text-[10px] mt-4 uppercase font-black">Connecting to Elite Servers</p>
+        </div>
+      );
+    }
+
+    if (view === 'lobby') {
+      return (
+        <div className="h-full w-full flex flex-col items-center justify-center bg-[#02040a] p-8">
+          <div className="glass-panel p-10 rounded-[2.5rem] border-white/10 w-full max-w-md text-center">
+            <div className="text-[8px] font-black text-indigo-400 uppercase tracking-[0.3em] mb-2">Private Arena</div>
+            <h2 className="text-3xl font-black mb-8">LOBBY</h2>
+            <div className="bg-white/5 p-6 rounded-2xl border border-white/10 mb-8">
+              <div className="text-[8px] font-black text-white/20 uppercase mb-1">Table Code</div>
+              <div className="text-2xl font-mono font-black tracking-widest text-indigo-400">{gameState?.tableCode}</div>
+            </div>
             <div className="space-y-4">
-              <input 
-                type="email" 
-                value={loginEmail}
-                onChange={e => setLoginEmail(e.target.value)}
-                placeholder="PLAYER EMAIL" 
-                className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-sm font-black outline-none focus:border-indigo-500/50 focus:bg-white/10 transition-all uppercase placeholder:text-white/20" 
-              />
-              <input 
-                type="password" 
-                value={loginPass}
-                onChange={e => setLoginPass(e.target.value)}
-                placeholder="ACCESS KEY" 
-                className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-sm font-black outline-none focus:border-indigo-500/50 focus:bg-white/10 transition-all uppercase placeholder:text-white/20" 
-              />
-              <button 
-                onClick={() => handleLogin('email')}
-                disabled={!loginEmail || !loginPass || isLoggingIn}
-                className="gold-button w-full py-5 rounded-2xl text-lg mt-2 disabled:opacity-50"
-              >
-                {isLoggingIn ? 'SECURE HANDSHAKE...' : 'ENTER ARENA'}
-              </button>
-              <div className="grid grid-cols-2 gap-4 mt-4">
-                <button onClick={() => handleLogin('google')} className="bg-white text-black rounded-2xl py-4 font-black text-[10px] uppercase">Google</button>
-                <button onClick={() => handleLogin('facebook')} className="bg-[#1877F2] text-white rounded-2xl py-4 font-black text-[10px] uppercase">Facebook</button>
+              <div className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10">
+                <span className="font-black uppercase text-xs">{profile.username}</span>
+                <span className="text-[8px] font-black text-emerald-400 uppercase">Ready</span>
+              </div>
+              {[1, 2, 3].map(i => (
+                <div key={i} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10 opacity-50">
+                  <span className="font-black uppercase text-xs text-white/20">Waiting...</span>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => setView('game')} className="gold-button w-full py-5 rounded-2xl text-lg mt-10">Start Match</button>
+          </div>
+        </div>
+      );
+    }
+
+    if (view === 'login') {
+      return (
+        <div className="h-full w-full flex flex-col items-center justify-center p-8 bg-[#02040a] relative overflow-hidden">
+          <div className="w-full max-w-md z-10 space-y-12 text-center">
+            <h1 className="text-6xl md:text-8xl turab-title font-black italic">TURAB'</h1>
+            <div className="glass-panel p-10 rounded-[2.5rem] border-white/10 shadow-2xl">
+              <h2 className="text-xl font-black uppercase tracking-widest mb-8 text-white/80">Authorize Access</h2>
+              <div className="space-y-4">
+                <input 
+                  type="email" 
+                  value={loginEmail}
+                  onChange={e => setLoginEmail(e.target.value)}
+                  placeholder="PLAYER EMAIL" 
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-sm font-black outline-none focus:border-indigo-500/50 focus:bg-white/10 transition-all uppercase placeholder:text-white/20" 
+                />
+                <input 
+                  type="password" 
+                  value={loginPass}
+                  onChange={e => setLoginPass(e.target.value)}
+                  placeholder="ACCESS KEY" 
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-sm font-black outline-none focus:border-indigo-500/50 focus:bg-white/10 transition-all uppercase placeholder:text-white/20" 
+                />
+                <button 
+                  onClick={() => handleLogin('email')}
+                  disabled={!loginEmail || !loginPass || isLoggingIn}
+                  className="gold-button w-full py-5 rounded-2xl text-lg mt-2 disabled:opacity-50"
+                >
+                  {isLoggingIn ? 'SECURE HANDSHAKE...' : 'ENTER ARENA'}
+                </button>
+                <div className="grid grid-cols-2 gap-4 mt-4">
+                  <button onClick={() => handleLogin('google')} className="bg-white text-black rounded-2xl py-4 font-black text-[10px] uppercase">Google</button>
+                  <button onClick={() => handleLogin('facebook')} className="bg-[#1877F2] text-white rounded-2xl py-4 font-black text-[10px] uppercase">Facebook</button>
+                </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
-    );
-  }
+      );
+    }
 
-  if (view === 'home') {
-    const userRank = getLevelTitle(profile.level);
-    return (
-      <div className="h-full w-full flex flex-col items-center justify-between p-8 bg-[#02040a] relative overflow-hidden">
-        <div className="text-center mt-10">
-          <h1 className="text-5xl md:text-7xl turab-title font-black italic">TURAB'</h1>
-          <p className="text-indigo-400 font-black uppercase tracking-[0.4em] text-[10px] mt-2">Elite Card Series</p>
+    if (view === 'home') {
+      const userRank = getLevelTitle(profile.level);
+      return (
+        <div className="h-full w-full flex flex-col items-center justify-between p-8 bg-[#02040a] relative overflow-hidden">
+          <div className="text-center mt-10">
+            <h1 className="text-5xl md:text-7xl turab-title font-black italic">TURAB'</h1>
+            <p className="text-indigo-400 font-black uppercase tracking-[0.4em] text-[10px] mt-2">Elite Card Series</p>
+          </div>
+          <div className="w-full max-w-sm space-y-4">
+            <div className="glass-panel p-6 rounded-[2rem] flex items-center gap-4">
+              <div className="w-16 h-16 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-3xl shadow-lg">👤</div>
+              <div className="flex-1">
+                <div className={`text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${userRank.bg} ${userRank.color} border ${userRank.border} w-fit mb-1`}>{userRank.title}</div>
+                <h2 className="text-xl font-black">{profile.username}</h2>
+                <div className="text-lg font-black">{profile.coins} <span className="text-xs text-yellow-500">🪙</span></div>
+              </div>
+            </div>
+            <button onClick={() => startNewGame('classic')} className="gold-button w-full py-6 rounded-3xl text-xl">Quick Start</button>
+            <button onClick={handleLogout} className="w-full py-3 text-[8px] font-black uppercase text-white/20 hover:text-red-400">Sign Out</button>
+          </div>
         </div>
-        <div className="w-full max-w-sm space-y-4">
-          <div className="glass-panel p-6 rounded-[2rem] flex items-center gap-4">
-            <div className="w-16 h-16 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-3xl shadow-lg">👤</div>
-            <div className="flex-1">
-              <div className={`text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${userRank.bg} ${userRank.color} border ${userRank.border} w-fit mb-1`}>{userRank.title}</div>
-              <h2 className="text-xl font-black">{profile.username}</h2>
-              <div className="text-lg font-black">{profile.coins} <span className="text-xs text-yellow-500">🪙</span></div>
+      );
+    }
+
+    if (!gameState) return null;
+
+    return (
+      <div className="h-full w-full relative bg-[#01030a] flex flex-col items-center justify-center overflow-hidden">
+        <div className="absolute top-0 left-0 p-4 md:p-6 z-[150]">
+          <div className="flex gap-2">
+            <button onClick={() => setView('home')} className="glass-panel w-10 h-10 rounded-full flex items-center justify-center">←</button>
+            <div className="glass-panel p-2 px-5 rounded-xl border-white/10">
+              <div className="text-[8px] font-black text-indigo-400 uppercase">TEAM ALPHA</div>
+              <div className="text-xl font-black">{teamAlphaScore}</div>
             </div>
           </div>
-          <button onClick={() => startNewGame('classic')} className="gold-button w-full py-6 rounded-3xl text-xl">Quick Start</button>
-          <button onClick={handleLogout} className="w-full py-3 text-[8px] font-black uppercase text-white/20 hover:text-red-400">Sign Out</button>
         </div>
+
+        <div className="absolute top-0 right-0 p-4 md:p-6 z-[150]">
+          <button onClick={toggleMic} className={`glass-panel w-10 h-10 rounded-full flex items-center justify-center transition-all ${isMicActive ? 'mic-active' : 'text-white/50'}`}>
+            {isMicActive ? '🎤' : '🎙️'}
+          </button>
+        </div>
+
+        <div className={`felt-table w-[300px] h-[300px] md:w-[500px] md:h-[500px] rounded-full flex items-center justify-center ${isThunderActive ? 'thunder-active' : ''}`}>
+          <div className="pile-indicator">
+            <div className="w-20 h-20 rounded-full bg-black/60 border border-white/10 flex flex-col items-center justify-center backdrop-blur-md">
+              <span className="text-[8px] font-black text-white/40 uppercase">Pile</span>
+              <span className="text-2xl font-black text-white">{gameState.pile.length}</span>
+            </div>
+          </div>
+
+          <div className="relative w-full h-full flex items-center justify-center">
+            {gameState.currentTrick.map((t) => (
+              <div key={t.playerId} className={`absolute animate-deal z-[50]`}>
+                <CardComponent card={t.card} skin={profile.activeSkin} className="scale-75 md:scale-100" />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="card-wing-container">
+          {playerHandSorted.map((card, idx) => {
+            const isMyTurn = gameState.currentTurn === 0 && !isProcessing && gameState.currentTrick.length < 4;
+            const isSelectable = isMyTurn && (!gameState.leadSuit || card.suit === gameState.leadSuit || !gameState.players[0].hand.some(c => c.suit === gameState.leadSuit));
+            return (
+              <div key={`${card.suit}-${card.rank}-${idx}`} className="wing-card">
+                <CardComponent 
+                  card={card} 
+                  skin={profile.activeSkin} 
+                  onClick={() => playCard(0, card)} 
+                  disabled={!isSelectable && isMyTurn} 
+                />
+              </div>
+            );
+          })}
+        </div>
+
+        {trumpAlert && (
+          <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[2000] pointer-events-none">
+            <div className="glass-panel p-4 px-8 rounded-3xl border-2 border-indigo-500/50 flex items-center gap-4 shadow-2xl animate-bounce">
+              <span className="text-4xl text-indigo-400">{suitIcons[trumpAlert.suit]}</span>
+              <div className="text-left">
+                <div className="text-[8px] font-black text-indigo-400 uppercase tracking-widest">TRUMP ANNOUNCED</div>
+                <div className="text-2xl font-black uppercase">{trumpAlert.suit}</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {gameState.roundStatus === 'ended' && (
+          <div className="fixed inset-0 bg-black/95 z-[5000] flex flex-col items-center justify-center p-8 backdrop-blur-3xl text-center">
+            <h2 className="text-5xl turab-title font-black italic mb-12">MATCH OVER</h2>
+            <div className="w-full max-w-sm space-y-4">
+              <button onClick={() => startNewGame('classic')} className="gold-button w-full py-6 rounded-3xl text-xl">Play Again</button>
+              <button onClick={() => setView('home')} className="w-full py-5 bg-white/5 border border-white/10 rounded-3xl text-xs font-black uppercase text-white/40">Back to Lobby</button>
+            </div>
+          </div>
+        )}
       </div>
     );
-  }
-
-  if (!gameState) return null;
+  };
 
   return (
-    <div className="h-full w-full relative bg-[#01030a] flex flex-col items-center justify-center overflow-hidden">
-      <div className="absolute top-0 left-0 p-4 md:p-6 z-[150]">
-        <div className="flex gap-2">
-          <button onClick={() => setView('home')} className="glass-panel w-10 h-10 rounded-full flex items-center justify-center">←</button>
-          <div className="glass-panel p-2 px-5 rounded-xl border-white/10">
-            <div className="text-[8px] font-black text-indigo-400 uppercase">TEAM ALPHA</div>
-            <div className="text-xl font-black">{teamAlphaScore}</div>
-          </div>
-        </div>
-      </div>
-
-      <div className="absolute top-0 right-0 p-4 md:p-6 z-[150]">
-        <button onClick={toggleMic} className={`glass-panel w-10 h-10 rounded-full flex items-center justify-center transition-all ${isMicActive ? 'mic-active' : 'text-white/50'}`}>
-          {isMicActive ? '🎤' : '🎙️'}
-        </button>
-      </div>
-
-      <div className={`felt-table w-[300px] h-[300px] md:w-[500px] md:h-[500px] rounded-full flex items-center justify-center ${isThunderActive ? 'thunder-active' : ''}`}>
-        <div className="pile-indicator">
-          <div className="w-20 h-20 rounded-full bg-black/60 border border-white/10 flex flex-col items-center justify-center backdrop-blur-md">
-            <span className="text-[8px] font-black text-white/40 uppercase">Pile</span>
-            <span className="text-2xl font-black text-white">{gameState.pile.length}</span>
-          </div>
-        </div>
-
-        <div className="relative w-full h-full flex items-center justify-center">
-          {gameState.currentTrick.map((t) => (
-            <div key={t.playerId} className={`absolute animate-deal z-[50]`}>
-              <CardComponent card={t.card} skin={profile.activeSkin} className="scale-75 md:scale-100" />
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="card-wing-container">
-        {playerHandSorted.map((card, idx) => {
-          const isMyTurn = gameState.currentTurn === 0 && !isProcessing && gameState.currentTrick.length < 4;
-          const isSelectable = isMyTurn && (!gameState.leadSuit || card.suit === gameState.leadSuit || !gameState.players[0].hand.some(c => c.suit === gameState.leadSuit));
-          return (
-            <div key={`${card.suit}-${card.rank}-${idx}`} className="wing-card">
-              <CardComponent 
-                card={card} 
-                skin={profile.activeSkin} 
-                onClick={() => playCard(0, card)} 
-                disabled={!isSelectable && isMyTurn} 
-              />
-            </div>
-          );
-        })}
-      </div>
-
-      {trumpAlert && (
-        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[2000] pointer-events-none">
-          <div className="glass-panel p-4 px-8 rounded-3xl border-2 border-indigo-500/50 flex items-center gap-4 shadow-2xl animate-bounce">
-            <span className="text-4xl text-indigo-400">{suitIcons[trumpAlert.suit]}</span>
-            <div className="text-left">
-              <div className="text-[8px] font-black text-indigo-400 uppercase tracking-widest">TRUMP ANNOUNCED</div>
-              <div className="text-2xl font-black uppercase">{trumpAlert.suit}</div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {gameState.roundStatus === 'ended' && (
-        <div className="fixed inset-0 bg-black/95 z-[5000] flex flex-col items-center justify-center p-8 backdrop-blur-3xl text-center">
-          <h2 className="text-5xl turab-title font-black italic mb-12">MATCH OVER</h2>
-          <div className="w-full max-w-sm space-y-4">
-            <button onClick={() => startNewGame('classic')} className="gold-button w-full py-6 rounded-3xl text-xl">Play Again</button>
-            <button onClick={() => setView('home')} className="w-full py-5 bg-white/5 border border-white/10 rounded-3xl text-xs font-black uppercase text-white/40">Back to Lobby</button>
-          </div>
-        </div>
-      )}
+    <div className="h-full w-full">
+      <Toaster position="top-center" richColors />
+      {renderView()}
     </div>
   );
 };
