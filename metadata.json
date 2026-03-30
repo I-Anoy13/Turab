@@ -1,0 +1,8 @@
+{
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "name": "TURAB' - Elite Card Series",
+  "description": ""
+}

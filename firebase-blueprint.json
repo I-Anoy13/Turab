@@ -1,0 +1,45 @@
+{
+  "entities": {
+    "users": {
+      "title": "User Profile",
+      "description": "Stores user statistics, coins, and customization options.",
+      "type": "object",
+      "properties": {
+        "turab_id": { "type": "string", "description": "The unique Firebase UID of the user." },
+        "username": { "type": "string", "description": "The display name of the user." },
+        "coins": { "type": "integer", "description": "The current coin balance of the user." },
+        "wins": { "type": "integer", "description": "Total number of games won." },
+        "losses": { "type": "integer", "description": "Total number of games lost." },
+        "gamesPlayed": { "type": "integer", "description": "Total number of games played." },
+        "xp": { "type": "integer", "description": "Experience points earned." },
+        "level": { "type": "integer", "description": "Current player level." },
+        "scraps": { "type": "integer", "description": "In-game currency for crafting." },
+        "coupons": { "type": "integer", "description": "Reward coupons." },
+        "skins": { "type": "array", "items": { "type": "string" }, "description": "List of owned card skins." },
+        "activeSkin": { "type": "string", "enum": ["classic", "neon", "gold", "void"], "description": "The currently selected card skin." },
+        "frames": { "type": "array", "items": { "type": "string" }, "description": "List of owned profile frames." },
+        "activeFrame": { "type": "string", "enum": ["none", "elite", "grandmaster", "thunder"], "description": "The currently selected profile frame." },
+        "friends": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "username": { "type": "string" },
+              "status": { "type": "string", "enum": ["online", "offline", "in-game"] },
+              "level": { "type": "integer" }
+            }
+          },
+          "description": "List of user's friends."
+        }
+      },
+      "required": ["turab_id", "username", "coins", "wins", "losses", "gamesPlayed", "xp", "level"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "users",
+      "description": "User profile document."
+    }
+  }
+}

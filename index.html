@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>TURAB' - Elite Card Series</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Outfit:wght@300;400;600;900&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --felt-green: #064e3b;
+            --felt-dark: #011c12;
+            --gold: #fbbf24;
+            --glass: rgba(10, 15, 30, 0.85);
+            --lightning-blue: #a5f3fc;
+            --lightning-core: #ffffff;
+            --neon-indigo: #6366f1;
+            --trump-orange: #f97316;
+            --status-online: #22c55e;
+            --status-ingame: #a855f7;
+            --status-offline: #64748b;
+        }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; margin: 0; padding: 0; }
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: #02040a;
+            color: white;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+            position: fixed;
+            user-select: none;
+            touch-action: none;
+        }
+        #root { width: 100%; height: 100%; }
+
+        .turab-title {
+            font-family: 'Cinzel', serif;
+            letter-spacing: 0.25em;
+            background: linear-gradient(to bottom, #ffffff 0%, #cbd5e1 50%, #94a3b8 100%);
+            -webkit-background-clip: text;
+            -webkit-fill-color: transparent;
+            -webkit-text-fill-color: transparent;
+            filter: drop-shadow(0 0 10px rgba(255,255,255,0.2));
+        }
+
+        .felt-table {
+            background: radial-gradient(circle at center, #065f46 0%, #022c22 60%, #011c12 100%);
+            box-shadow: 
+                inset 0 0 120px rgba(0,0,0,0.9), 
+                0 0 80px rgba(6, 95, 70, 0.3);
+            border: 8px solid #1a1412;
+            position: relative;
+            outline: 1px solid rgba(251, 191, 36, 0.1);
+            transition: all 0.8s cubic-bezier(0.19, 1, 0.22, 1);
+        }
+
+        .card-wing-container {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100%;
+            max-width: 600px;
+            height: 200px;
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+            padding-bottom: 20px;
+            z-index: 100;
+            pointer-events: none;
+        }
+        .wing-card {
+            position: absolute;
+            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), filter 0.3s ease;
+            pointer-events: auto;
+            transform-origin: bottom center;
+        }
+
+        @keyframes lightning-flash {
+            0% { filter: brightness(1); background-color: transparent; }
+            5% { filter: brightness(4); background-color: rgba(165, 243, 252, 0.2); }
+            10% { filter: brightness(1.5); }
+            15% { filter: brightness(6); background-color: rgba(255, 255, 255, 0.3); }
+            100% { filter: brightness(1); }
+        }
+        .thunder-active { animation: lightning-flash 0.6s ease-out; }
+
+        .thunder-bolt {
+            position: absolute;
+            top: -100%;
+            left: 50%;
+            width: 4px;
+            height: 300%;
+            background: var(--lightning-core);
+            box-shadow: 0 0 20px var(--lightning-blue), 0 0 40px var(--lightning-blue);
+            z-index: 200;
+            opacity: 0;
+            pointer-events: none;
+        }
+        .thunder-active .thunder-bolt {
+            animation: bolt-strike 0.6s ease-out;
+        }
+        @keyframes bolt-strike {
+            0% { opacity: 0; transform: translateX(-50%) scaleY(0) skewX(-10deg); }
+            10% { opacity: 1; transform: translateX(-50%) scaleY(1) skewX(-15deg); }
+            20% { opacity: 0.2; transform: translateX(-50%) scaleY(1) skewX(5deg); }
+            30% { opacity: 1; transform: translateX(-50%) scaleY(1) skewX(-20deg); }
+            100% { opacity: 0; transform: translateX(-50%) scaleY(1) skewX(-30deg); }
+        }
+
+        .trump-aura {
+            position: relative;
+            animation: trump-glow 2s infinite ease-in-out;
+            border-color: var(--trump-orange) !important;
+        }
+        @keyframes trump-glow {
+            0%, 100% { box-shadow: 0 0 10px rgba(249, 115, 22, 0.4), inset 0 0 5px rgba(249, 115, 22, 0.2); }
+            50% { box-shadow: 0 0 25px rgba(249, 115, 22, 0.8), inset 0 0 15px rgba(249, 115, 22, 0.4); }
+        }
+
+        .winner-highlight {
+            transform: scale(1.15) !important;
+            z-index: 500 !important;
+            border: 3px solid #ffffff !important;
+            box-shadow: 
+                0 0 20px #ffffff, 
+                0 0 40px var(--gold), 
+                inset 0 0 15px rgba(255, 255, 255, 0.5) !important;
+            animation: winner-majesty 1.2s infinite alternate ease-in-out;
+            filter: brightness(1.2) contrast(1.1);
+        }
+        
+        @keyframes winner-majesty {
+            0% { transform: scale(1.15) translateY(0); }
+            100% { transform: scale(1.2) translateY(-10px) rotate(1deg); }
+        }
+
+        .glass-panel {
+            background: var(--glass);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        .gold-button {
+            background: linear-gradient(135deg, #fcd34d 0%, #fbbf24 40%, #d97706 100%);
+            color: #451a03;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            box-shadow: 0 6px 0 #92400e, 0 10px 20px rgba(217, 119, 6, 0.2);
+            transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        .gold-button:active { transform: translateY(4px) scale(0.97); box-shadow: 0 2px 0 #92400e; }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .status-online { background-color: var(--status-online); box-shadow: 0 0 8px var(--status-online); }
+        .status-ingame { background-color: var(--status-ingame); box-shadow: 0 0 8px var(--status-ingame); }
+        .status-offline { background-color: var(--status-offline); }
+
+        .xp-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #6366f1, #a855f7);
+            box-shadow: 0 0 10px rgba(99, 102, 241, 0.5);
+            transition: width 0.6s ease;
+        }
+
+        .pile-indicator {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .animate-deal { animation: deal-card 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        @keyframes deal-card { from { transform: translate(-50%, -300%) scale(0) rotate(180deg); opacity: 0; } to { transform: translate(0, 0) scale(1) rotate(0); opacity: 1; } }
+
+        .sidebar-open { transform: translateX(0); }
+        .sidebar-closed { transform: translateX(100%); }
+
+        @keyframes mic-pulse {
+            0% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.7); }
+            70% { box-shadow: 0 0 0 15px rgba(99, 102, 241, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+        }
+        .mic-active {
+            animation: mic-pulse 2s infinite;
+            background-color: #6366f1 !important;
+            color: white !important;
+            border-color: rgba(255,255,255,0.4) !important;
+          }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@19.0.0",
+    "react-dom": "https://esm.sh/react-dom@19.0.0",
+    "react-dom/": "https://esm.sh/react-dom@19.0.0/",
+    "react/": "https://esm.sh/react@19.0.0/",
+    "@google/genai": "https://esm.sh/@google/genai@1.40.0",
+    "firebase/app": "https://esm.sh/firebase@11.1.0/app",
+    "firebase/auth": "https://esm.sh/firebase@11.1.0/auth",
+    "firebase/firestore": "https://esm.sh/firebase@11.1.0/firestore",
+    "firebase/": "https://esm.sh/firebase@^12.9.0/"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body>
+    <div id="root"></div>
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>

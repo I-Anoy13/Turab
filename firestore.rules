@@ -1,0 +1,88 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId} (Firebase UID)
+    // Fields:
+    //   - turab_id: string (required, immutable) - The unique Firebase UID of the user.
+    //   - username: string (required) - The display name of the user.
+    //   - coins: number (required) - The current coin balance of the user.
+    //   - wins: number (required) - Total number of games won.
+    //   - losses: number (required) - Total number of games lost.
+    //   - gamesPlayed: number (required) - Total number of games played.
+    //   - xp: number (required) - Experience points earned.
+    //   - level: number (required) - Current player level.
+    //   - scraps: number (optional) - In-game currency for crafting.
+    //   - coupons: number (optional) - Reward coupons.
+    //   - skins: list (optional) - List of owned card skins.
+    //   - activeSkin: string (optional) - The currently selected card skin.
+    //   - frames: list (optional) - List of owned profile frames.
+    //   - activeFrame: string (optional) - The currently selected profile frame.
+    //   - friends: list (optional) - List of user's friends.
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function isValidUser(data) {
+      return hasRequiredFields(['turab_id', 'username', 'coins', 'wins', 'losses', 'gamesPlayed', 'xp', 'level']) &&
+             data.turab_id is string && data.turab_id.size() > 0 &&
+             data.username is string && data.username.size() > 0 && data.username.size() < 50 &&
+             data.coins is number && data.coins >= 0 &&
+             data.wins is number && data.wins >= 0 &&
+             data.losses is number && data.losses >= 0 &&
+             data.gamesPlayed is number && data.gamesPlayed >= 0 &&
+             data.xp is number && data.xp >= 0 &&
+             data.level is number && data.level >= 1;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      // Users can only read their own profile to protect PII
+      allow read: if isOwner(userId);
+      
+      // Users can only create their own profile with valid data
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      
+      // Users can only update their own profile with valid data, ensuring turab_id is immutable
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && areImmutableFieldsUnchanged(['turab_id']);
+      
+      // Users can delete their own profile
+      allow delete: if isOwner(userId);
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}
