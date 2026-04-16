@@ -38,6 +38,12 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "anoypak3@gmail.com" && request.auth.token.email_verified == true)); // Default admin
+    }
+
     function hasRequiredFields(fields) {
       return request.resource.data.keys().hasAll(fields);
     }
@@ -51,15 +57,27 @@ service cloud.firestore {
     }
 
     function isValidUser(data) {
+      let allowedSkins = ["classic", "neon", "gold", "void"];
+      let allowedFrames = ["none", "elite", "grandmaster", "thunder"];
+      
       return hasRequiredFields(['turab_id', 'username', 'coins', 'wins', 'losses', 'gamesPlayed', 'xp', 'level']) &&
-             data.turab_id is string && data.turab_id.size() > 0 &&
+             hasOnlyAllowedFields(['turab_id', 'username', 'coins', 'wins', 'losses', 'gamesPlayed', 'xp', 'level', 'scraps', 'coupons', 'skins', 'activeSkin', 'frames', 'activeFrame', 'friends', 'role']) &&
+             data.turab_id is string && data.turab_id.size() > 0 && data.turab_id.size() < 128 &&
              data.username is string && data.username.size() > 0 && data.username.size() < 50 &&
              data.coins is number && data.coins >= 0 &&
              data.wins is number && data.wins >= 0 &&
              data.losses is number && data.losses >= 0 &&
              data.gamesPlayed is number && data.gamesPlayed >= 0 &&
              data.xp is number && data.xp >= 0 &&
-             data.level is number && data.level >= 1;
+             data.level is number && data.level >= 1 &&
+             (!('scraps' in data) || (data.scraps is number && data.scraps >= 0)) &&
+             (!('coupons' in data) || (data.coupons is number && data.coupons >= 0)) &&
+             (!('skins' in data) || (data.skins is list && data.skins.size() <= 100)) &&
+             (!('activeSkin' in data) || data.activeSkin in allowedSkins) &&
+             (!('frames' in data) || (data.frames is list && data.frames.size() <= 100)) &&
+             (!('activeFrame' in data) || data.activeFrame in allowedFrames) &&
+             (!('friends' in data) || (data.friends is list && data.friends.size() <= 500)) &&
+             (!('role' in data) || (data.role is string && data.role in ['admin', 'user']));
     }
 
     // ===============================================================
@@ -68,16 +86,23 @@ service cloud.firestore {
 
     match /users/{userId} {
       // Users can only read their own profile to protect PII
-      allow read: if isOwner(userId);
+      allow read: if isOwner(userId) || isAdmin();
       
       // Users can only create their own profile with valid data
-      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      // Prevent self-escalation to admin
+      allow create: if isOwner(userId) && 
+                      isValidUser(request.resource.data) && 
+                      (!('role' in request.resource.data) || request.resource.data.role == 'user');
       
-      // Users can only update their own profile with valid data, ensuring turab_id is immutable
-      allow update: if isOwner(userId) && isValidUser(request.resource.data) && areImmutableFieldsUnchanged(['turab_id']);
+      // Users can only update their own profile with valid data
+      // Prevent self-escalation to admin and ensure turab_id is immutable
+      allow update: if (isOwner(userId) && 
+                       isValidUser(request.resource.data) && 
+                       areImmutableFieldsUnchanged(['turab_id', 'role'])) || 
+                       isAdmin();
       
-      // Users can delete their own profile
-      allow delete: if isOwner(userId);
+      // Only admins can delete profiles
+      allow delete: if isAdmin();
     }
 
     // Default deny

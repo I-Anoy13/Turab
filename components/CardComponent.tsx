@@ -60,7 +60,7 @@ const CardComponent: React.FC<CardComponentProps> = ({
       style={style}
       className={`
         ${baseClasses} ${s.bg} ${s.border} flex flex-col justify-between p-1.5 md:p-3 cursor-pointer
-        ${disabled ? 'opacity-40 grayscale scale-95 cursor-not-allowed' : 'hover:-translate-y-2 hover:shadow-indigo-500/20 active:scale-95'}
+        ${disabled ? 'opacity-40 grayscale scale-95 cursor-not-allowed' : 'md:hover:-translate-y-2 md:hover:shadow-indigo-500/20 active:scale-95'}
         ${className}
       `}
     >

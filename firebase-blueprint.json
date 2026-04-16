@@ -19,6 +19,7 @@
         "activeSkin": { "type": "string", "enum": ["classic", "neon", "gold", "void"], "description": "The currently selected card skin." },
         "frames": { "type": "array", "items": { "type": "string" }, "description": "List of owned profile frames." },
         "activeFrame": { "type": "string", "enum": ["none", "elite", "grandmaster", "thunder"], "description": "The currently selected profile frame." },
+        "role": { "type": "string", "enum": ["admin", "user"], "description": "The user's role." },
         "friends": {
           "type": "array",
           "items": {

@@ -11,13 +11,17 @@
   },
   "dependencies": {
     "@google/genai": "1.40.0",
-    "firebase": "^12.9.0",
+    "firebase": "^12.12.0",
+    "motion": "^12.38.0",
+    "peerjs": "^1.5.5",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "sonner": "^2.0.7"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.0.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"

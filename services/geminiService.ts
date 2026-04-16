@@ -2,13 +2,13 @@
 import { GoogleGenAI } from "@google/genai";
 
 // Initialize the Google GenAI client correctly with the API key from environment variables.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 export const getGameCommentary = async (
   event: string, 
   gameState: any
 ): Promise<string> => {
-  if (!process.env.API_KEY) return "The dealer watches the game intently.";
+  if (!process.env.GEMINI_API_KEY) return "The dealer watches the game intently.";
 
   try {
     const response = await ai.models.generateContent({

@@ -15,6 +15,7 @@ export interface Player {
   score: number;
   isAI: boolean;
   consecutiveWins: number;
+  lastWinWasAce: boolean;
 }
 
 export interface Friend {
@@ -39,13 +40,24 @@ export interface UserProfile {
   activeSkin: 'classic' | 'neon' | 'gold' | 'void';
   frames: string[];
   activeFrame: 'none' | 'elite' | 'grandmaster' | 'thunder';
+  role: 'admin' | 'user';
   friends: Friend[];
 }
 
 export type GameMode = 'classic' | 'private' | 'join';
 export type AppView = 'login' | 'home' | 'game' | 'searching' | 'crate' | 'missions' | 'lobby';
 
+export interface FriendRequest {
+  id: string;
+  fromUid: string;
+  fromUsername: string;
+  toUid: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  timestamp: any;
+}
+
 export interface GameState {
+  id: string;
   players: Player[];
   pile: Card[];
   wonPile: Card[];
@@ -58,6 +70,7 @@ export interface GameState {
   lastWinner: number | null;
   stake: number;
   tableCode?: string;
+  playerUids: string[]; // To track real human players
 }
 
 export const RANK_VALUES: Record<Rank, number> = {

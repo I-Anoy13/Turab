@@ -1,9 +1,10 @@
 {
+  "projectId": "turab-d2f2c",
+  "appId": "1:22237938511:web:13d9f7b5a1ac5f1b443b3a",
   "apiKey": "AIzaSyCof9dWyHauYmMOfQ5pyUN_plVnegjM6yc",
   "authDomain": "turab-d2f2c.firebaseapp.com",
-  "projectId": "turab-d2f2c",
+  "firestoreDatabaseId": "ai-studio-a7ea30f2-23f9-43d8-8afe-6078fcbfbb10",
   "storageBucket": "turab-d2f2c.firebasestorage.app",
   "messagingSenderId": "22237938511",
-  "appId": "1:22237938511:web:dac4d3432370facf443b3a",
-  "measurementId": "G-M0RYCJFTWW"
+  "measurementId": ""
 }
