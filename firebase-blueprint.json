@@ -1,46 +1,88 @@
 {
   "entities": {
-    "users": {
-      "title": "User Profile",
-      "description": "Stores user statistics, coins, and customization options.",
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile and statistics",
       "type": "object",
       "properties": {
-        "turab_id": { "type": "string", "description": "The unique Firebase UID of the user." },
-        "username": { "type": "string", "description": "The display name of the user." },
-        "coins": { "type": "integer", "description": "The current coin balance of the user." },
-        "wins": { "type": "integer", "description": "Total number of games won." },
-        "losses": { "type": "integer", "description": "Total number of games lost." },
-        "gamesPlayed": { "type": "integer", "description": "Total number of games played." },
-        "xp": { "type": "integer", "description": "Experience points earned." },
-        "level": { "type": "integer", "description": "Current player level." },
-        "scraps": { "type": "integer", "description": "In-game currency for crafting." },
-        "coupons": { "type": "integer", "description": "Reward coupons." },
-        "skins": { "type": "array", "items": { "type": "string" }, "description": "List of owned card skins." },
-        "activeSkin": { "type": "string", "enum": ["classic", "neon", "gold", "void"], "description": "The currently selected card skin." },
-        "frames": { "type": "array", "items": { "type": "string" }, "description": "List of owned profile frames." },
-        "activeFrame": { "type": "string", "enum": ["none", "elite", "grandmaster", "thunder"], "description": "The currently selected profile frame." },
-        "role": { "type": "string", "enum": ["admin", "user"], "description": "The user's role." },
-        "friends": {
-          "type": "array",
-          "items": {
+        "turab_id": { "type": "string" },
+        "coins": { "type": "number" },
+        "wins": { "type": "number" },
+        "losses": { "type": "number" },
+        "gamesPlayed": { "type": "number" },
+        "username": { "type": "string" },
+        "xp": { "type": "number" },
+        "level": { "type": "number" },
+        "scraps": { "type": "number" },
+        "coupons": { "type": "number" },
+        "skins": { "type": "array", "items": { "type": "string" } },
+        "activeSkin": { "type": "string", "enum": ["classic", "neon", "gold", "void"] },
+        "frames": { "type": "array", "items": { "type": "string" } },
+        "activeFrame": { "type": "string", "enum": ["none", "elite", "grandmaster", "thunder"] },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "friends": { 
+          "type": "array", 
+          "items": { 
             "type": "object",
             "properties": {
               "id": { "type": "string" },
               "username": { "type": "string" },
               "status": { "type": "string", "enum": ["online", "offline", "in-game"] },
-              "level": { "type": "integer" }
+              "level": { "type": "number" }
             }
-          },
-          "description": "List of user's friends."
+          }
         }
       },
-      "required": ["turab_id", "username", "coins", "wins", "losses", "gamesPlayed", "xp", "level"]
+      "required": ["turab_id", "username", "coins", "level"]
+    },
+    "FriendRequest": {
+      "title": "FriendRequest",
+      "description": "Request to be friends",
+      "type": "object",
+      "properties": {
+        "fromUid": { "type": "string" },
+        "fromUsername": { "type": "string" },
+        "toUid": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "rejected"] },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["fromUid", "toUid", "status"]
+    },
+    "Match": {
+      "title": "Match",
+      "description": "Game match state",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "players": { "type": "array" },
+        "pile": { "type": "array" },
+        "wonPile": { "type": "array" },
+        "currentTrick": { "type": "array" },
+        "trumpSuit": { "type": "string" },
+        "currentTurn": { "type": "number" },
+        "leadSuit": { "type": "string" },
+        "roundStatus": { "type": "string", "enum": ["playing", "ended"] },
+        "history": { "type": "array" },
+        "lastWinner": { "type": "number" },
+        "stake": { "type": "number" },
+        "tableCode": { "type": "string" },
+        "playerUids": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["id", "players", "roundStatus", "playerUids"]
     }
   },
   "firestore": {
     "/users/{userId}": {
-      "schema": "users",
-      "description": "User profile document."
+      "schema": "UserProfile",
+      "description": "User profile data"
+    },
+    "/friend_requests/{requestId}": {
+      "schema": "FriendRequest",
+      "description": "Friend requests between users"
+    },
+    "/matches/{matchId}": {
+      "schema": "Match",
+      "description": "Active and past game matches"
     }
   }
 }

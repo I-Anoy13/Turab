@@ -6,23 +6,33 @@ service cloud.firestore {
     // ===============================================================
     //
     // Collection: users
-    // Document ID: {userId} (Firebase UID)
+    // Document ID: {userId} (matches auth.uid)
     // Fields:
-    //   - turab_id: string (required, immutable) - The unique Firebase UID of the user.
-    //   - username: string (required) - The display name of the user.
-    //   - coins: number (required) - The current coin balance of the user.
-    //   - wins: number (required) - Total number of games won.
-    //   - losses: number (required) - Total number of games lost.
-    //   - gamesPlayed: number (required) - Total number of games played.
-    //   - xp: number (required) - Experience points earned.
-    //   - level: number (required) - Current player level.
-    //   - scraps: number (optional) - In-game currency for crafting.
-    //   - coupons: number (optional) - Reward coupons.
-    //   - skins: list (optional) - List of owned card skins.
-    //   - activeSkin: string (optional) - The currently selected card skin.
-    //   - frames: list (optional) - List of owned profile frames.
-    //   - activeFrame: string (optional) - The currently selected profile frame.
-    //   - friends: list (optional) - List of user's friends.
+    //   - turab_id: string (required)
+    //   - username: string (required, 3-20 chars)
+    //   - coins: number (required)
+    //   - level: number (required)
+    //   - role: string (admin/user)
+    //   - friends: list (array of Friend objects)
+    //
+    // Collection: friend_requests
+    // Document ID: auto-generated
+    // Fields:
+    //   - fromUid: string (required)
+    //   - fromUsername: string (required)
+    //   - toUid: string (required)
+    //   - status: string (pending/accepted/rejected)
+    //   - timestamp: timestamp
+    //
+    // Collection: matches
+    // Document ID: {matchId}
+    // Fields:
+    //   - id: string
+    //   - players: list
+    //   - playerUids: list (uids of human players)
+    //   - roundStatus: string (playing/ended)
+    //   - currentTurn: number
+    //   - ... (game state fields)
     //
     // ===============================================================
 
@@ -39,45 +49,28 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isAuthenticated() &&
+      return isAuthenticated() && 
         (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
-          (request.auth.token.email == "anoypak3@gmail.com" && request.auth.token.email_verified == true)); // Default admin
-    }
-
-    function hasRequiredFields(fields) {
-      return request.resource.data.keys().hasAll(fields);
-    }
-
-    function hasOnlyAllowedFields(fields) {
-      return request.resource.data.keys().hasOnly(fields);
-    }
-
-    function areImmutableFieldsUnchanged(fields) {
-      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+         (request.auth.token.email == "anoypak3@gmail.com" && request.auth.token.email_verified == true));
     }
 
     function isValidUser(data) {
-      let allowedSkins = ["classic", "neon", "gold", "void"];
-      let allowedFrames = ["none", "elite", "grandmaster", "thunder"];
-      
-      return hasRequiredFields(['turab_id', 'username', 'coins', 'wins', 'losses', 'gamesPlayed', 'xp', 'level']) &&
-             hasOnlyAllowedFields(['turab_id', 'username', 'coins', 'wins', 'losses', 'gamesPlayed', 'xp', 'level', 'scraps', 'coupons', 'skins', 'activeSkin', 'frames', 'activeFrame', 'friends', 'role']) &&
-             data.turab_id is string && data.turab_id.size() > 0 && data.turab_id.size() < 128 &&
-             data.username is string && data.username.size() > 0 && data.username.size() < 50 &&
-             data.coins is number && data.coins >= 0 &&
-             data.wins is number && data.wins >= 0 &&
-             data.losses is number && data.losses >= 0 &&
-             data.gamesPlayed is number && data.gamesPlayed >= 0 &&
-             data.xp is number && data.xp >= 0 &&
-             data.level is number && data.level >= 1 &&
-             (!('scraps' in data) || (data.scraps is number && data.scraps >= 0)) &&
-             (!('coupons' in data) || (data.coupons is number && data.coupons >= 0)) &&
-             (!('skins' in data) || (data.skins is list && data.skins.size() <= 100)) &&
-             (!('activeSkin' in data) || data.activeSkin in allowedSkins) &&
-             (!('frames' in data) || (data.frames is list && data.frames.size() <= 100)) &&
-             (!('activeFrame' in data) || data.activeFrame in allowedFrames) &&
-             (!('friends' in data) || (data.friends is list && data.friends.size() <= 500)) &&
-             (!('role' in data) || (data.role is string && data.role in ['admin', 'user']));
+      return data.keys().hasAll(['turab_id', 'username', 'coins', 'level']) &&
+             data.username is string && data.username.size() >= 3 && data.username.size() <= 20 &&
+             data.coins is number && data.level is number &&
+             data.role in ['admin', 'user'];
+    }
+
+    function isValidFriendRequest(data) {
+      return data.keys().hasAll(['fromUid', 'fromUsername', 'toUid', 'status']) &&
+             data.fromUid == request.auth.uid &&
+             data.status == 'pending';
+    }
+
+    function isValidMatch(data) {
+      return data.keys().hasAll(['id', 'players', 'roundStatus', 'playerUids']) &&
+             data.playerUids is list &&
+             data.roundStatus in ['playing', 'ended'];
     }
 
     // ===============================================================
@@ -85,29 +78,28 @@ service cloud.firestore {
     // ===============================================================
 
     match /users/{userId} {
-      // Users can only read their own profile to protect PII
-      allow read: if isOwner(userId) || isAdmin();
-      
-      // Users can only create their own profile with valid data
-      // Prevent self-escalation to admin
-      allow create: if isOwner(userId) && 
-                      isValidUser(request.resource.data) && 
-                      (!('role' in request.resource.data) || request.resource.data.role == 'user');
-      
-      // Users can only update their own profile with valid data
-      // Prevent self-escalation to admin and ensure turab_id is immutable
-      allow update: if (isOwner(userId) && 
-                       isValidUser(request.resource.data) && 
-                       areImmutableFieldsUnchanged(['turab_id', 'role'])) || 
-                       isAdmin();
-      
-      // Only admins can delete profiles
-      allow delete: if isAdmin();
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == 'user';
+      allow update: if isAuthenticated() && (
+        (isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role) || 
+        isAdmin()
+      );
     }
 
-    // Default deny
-    match /{path=**} {
-      allow read, write: if false;
+    match /friend_requests/{requestId} {
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.fromUid || request.auth.uid == resource.data.toUid);
+      allow create: if isAuthenticated() && isValidFriendRequest(request.resource.data);
+      allow delete: if isAuthenticated() && (request.auth.uid == resource.data.fromUid || request.auth.uid == resource.data.toUid);
+    }
+
+    match /matches/{matchId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidMatch(request.resource.data);
+      allow update: if isAuthenticated() && (
+        (request.auth.uid in resource.data.playerUids && isValidMatch(request.resource.data)) ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
     }
   }
 }
