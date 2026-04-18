@@ -262,6 +262,7 @@ const App: React.FC = () => {
   
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const resolvingTrickRef = useRef<string | null>(null);
   const [trumpAlert, setTrumpAlert] = useState<{ suit: Suit; playerName: string } | null>(null);
   const [isThunderActive, setIsThunderActive] = useState(false);
   
@@ -859,91 +860,113 @@ const App: React.FC = () => {
   }, [gameState?.currentTurn, isProcessing, gameState?.roundStatus, gameState?.leadSuit, playCard]);
 
   useEffect(() => {
-    if (gameState?.currentTrick.length === 4) {
+    if (!gameState || gameState.currentTrick.length !== 4 || isProcessing) return;
+
+    // Use a unique ID for the current trick to prevent double-processing or timer cancellation
+    const trickId = gameState.currentTrick.map(t => `${t.playerId}-${t.card.suit}-${t.card.rank}`).join('|');
+    if (resolvingTrickRef.current === trickId) return;
+
+    // Only the master client resolves
+    const isMaster = gameState.playerUids && gameState.playerUids[0] === auth.currentUser?.uid;
+    if (!isMaster) return;
+
+    resolvingTrickRef.current = trickId;
+    console.log("Arena: Trick detected full. Initiating resolution sequence...");
+
+    const timer = setTimeout(async () => {
       setIsProcessing(true);
-      setTimeout(() => {
-        setGameState(prev => {
-          if (!prev) return null;
-          const trick = prev.currentTrick;
-          const leadSuit = trick[0].card.suit;
-          const trumpSuit = prev.trumpSuit;
-          
-          let winId = trick[0].playerId;
-          let bestCard = trick[0].card;
+      try {
+        const matchRef = doc(db, 'matches', gameState.id);
+        const matchDoc = await getDoc(matchRef);
+        if (!matchDoc.exists()) return;
+        
+        const latestState = matchDoc.data() as GameState;
+        if (latestState.currentTrick.length !== 4) return;
 
-          trick.forEach(({ playerId, card }) => {
-            const isTrump = trumpSuit && card.suit === trumpSuit;
-            const isLead = card.suit === leadSuit;
-            const bestIsTrump = trumpSuit && bestCard.suit === trumpSuit;
+        const trick = latestState.currentTrick;
+        const leadSuit = trick[0].card.suit;
+        const trumpSuit = latestState.trumpSuit;
+        
+        let winId = trick[0].playerId;
+        let bestCard = trick[0].card;
 
-            if (isTrump) {
-              if (!bestIsTrump || card.value > bestCard.value) {
-                winId = playerId;
-                bestCard = card;
-              }
-            } else if (isLead) {
-              if (!bestIsTrump && card.value > bestCard.value) {
-                winId = playerId;
-                bestCard = card;
-              }
+        trick.forEach(({ playerId, card }) => {
+          const isTrump = trumpSuit && card.suit === trumpSuit;
+          const isLead = card.suit === leadSuit;
+          const bestIsTrump = trumpSuit && bestCard.suit === trumpSuit;
+
+          if (isTrump) {
+            if (!bestIsTrump || card.value > bestCard.value) {
+              winId = playerId;
+              bestCard = card;
             }
-          });
-
-          console.log(`Trick ended. Lead: ${leadSuit}, Trump: ${trumpSuit}. Winner: ${winId} with ${bestCard.rank} of ${bestCard.suit}`);
-
-          const winningTeamIndices = (winId === 0 || winId === 2) ? [0, 2] : [1, 3];
-          let updatedPlayers = [...prev.players];
-          
-          const isLastTrick = updatedPlayers.every(p => p.hand.length === 0);
-          
-          const isCurrentWinAce = bestCard.rank === 'A';
-          const wasLastWinAce = updatedPlayers[winId].lastWinWasAce;
-          const hasConsecutive = updatedPlayers[winId].consecutiveWins >= 1;
-          const isDoubleAceBlock = hasConsecutive && wasLastWinAce && isCurrentWinAce;
-          
-          let newPile = [...prev.pile, ...trick.map(t => t.card)];
-          let newWonPile = [...prev.wonPile];
-          
-          // Last trick wins the whole pile, or consecutive wins (with trump active and no double-ace block)
-          if (isLastTrick || (hasConsecutive && prev.trumpSuit && !isDoubleAceBlock)) {
-            updatedPlayers = updatedPlayers.map(p => {
-              if (winningTeamIndices.includes(p.id)) return { ...p, score: p.score + newPile.length, consecutiveWins: 0, lastWinWasAce: false };
-              return { ...p, consecutiveWins: 0, lastWinWasAce: false };
-            });
-            newWonPile = [...newWonPile, ...newPile];
-            newPile = [];
-          } else {
-            updatedPlayers = updatedPlayers.map(p => {
-              if (p.id === winId) {
-                return { 
-                  ...p, 
-                  consecutiveWins: p.consecutiveWins + 1, 
-                  lastWinWasAce: isCurrentWinAce 
-                };
-              }
-              return { ...p, consecutiveWins: 0, lastWinWasAce: false };
-            });
+          } else if (isLead) {
+            if (!bestIsTrump && card.value > bestCard.value) {
+              winId = playerId;
+              bestCard = card;
+            }
           }
-
-          const ended = updatedPlayers.every(p => p.hand.length === 0);
-          if (ended && winId === 0) {
-            const xpGain = 150;
-            const updatedProfile = { 
-              ...profile, 
-              xp: profile.xp + xpGain, 
-              level: Math.floor((profile.xp + xpGain) / 1000) + 1,
-              wins: profile.wins + 1 
-            };
-            setProfile(updatedProfile);
-            syncProfileToCloud(updatedProfile);
-          }
-
-          return { ...prev, players: updatedPlayers, pile: newPile, wonPile: newWonPile, currentTrick: [], leadSuit: null, currentTurn: winId, roundStatus: ended ? 'ended' : 'playing' };
         });
+
+        const winningTeamIndices = (winId === 0 || winId === 2) ? [0, 2] : [1, 3];
+        let updatedPlayers = [...latestState.players];
+        const isLastTrick = updatedPlayers.every(p => p.hand.length === 0);
+        
+        let newPile = [...latestState.pile, ...trick.map(t => t.card)];
+        let newWonPile = [...latestState.wonPile];
+        
+        // Calculate point bonuses/consecutive flags
+        const isCurrentWinAce = bestCard.rank === 'A';
+        const wasLastWinAce = updatedPlayers[winId].lastWinWasAce;
+        const hasConsecutive = updatedPlayers[winId].consecutiveWins >= 1;
+        const isDoubleAceBlock = hasConsecutive && wasLastWinAce && isCurrentWinAce;
+
+        if (isLastTrick || (hasConsecutive && latestState.trumpSuit && !isDoubleAceBlock)) {
+          updatedPlayers = updatedPlayers.map(p => {
+            if (winningTeamIndices.includes(p.id)) return { ...p, score: p.score + newPile.length, consecutiveWins: 0, lastWinWasAce: false };
+            return { ...p, consecutiveWins: 0, lastWinWasAce: false };
+          });
+          newWonPile = [...newWonPile, ...newPile];
+          newPile = [];
+        } else {
+          updatedPlayers = updatedPlayers.map(p => {
+            if (p.id === winId) return { ...p, consecutiveWins: p.consecutiveWins + 1, lastWinWasAce: isCurrentWinAce };
+            return { ...p, consecutiveWins: 0, lastWinWasAce: false };
+          });
+        }
+
+        const ended = updatedPlayers.every(p => p.hand.length === 0);
+
+        await updateDoc(matchRef, {
+          players: updatedPlayers,
+          pile: newPile,
+          wonPile: newWonPile,
+          currentTrick: [],
+          leadSuit: null,
+          currentTurn: winId,
+          roundStatus: ended ? 'ended' : 'playing'
+        });
+
+        if (ended && winId === 0) {
+          const xpGain = 150;
+          const updatedProfile = { 
+            ...profile, 
+            xp: profile.xp + xpGain, 
+            level: Math.floor((profile.xp + xpGain) / 1000) + 1,
+            wins: profile.wins + 1 
+          };
+          setProfile(updatedProfile);
+          syncProfileToCloud(updatedProfile);
+        }
+      } catch (err) {
+        console.error("Arena: Resolution failed.", err);
+      } finally {
         setIsProcessing(false);
-      }, 1500);
-    }
-  }, [gameState?.currentTrick.length, profile, syncProfileToCloud]);
+      }
+    }, 1200);
+
+    return () => clearTimeout(timer);
+  }, [gameState, isProcessing, profile, syncProfileToCloud, auth.currentUser?.uid]);
 
   const watchAd = () => {
     toast.loading("WATCHING AD...", { duration: 2000 });
@@ -1004,7 +1027,7 @@ const App: React.FC = () => {
                 <span className="text-[8px] font-black text-emerald-400 uppercase">Ready</span>
               </div>
               {[1, 2, 3].map(i => (
-                <div key={i} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10 opacity-50">
+                <div key={`lobby-waiting-${i}`} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10 opacity-50">
                   <span className="font-black uppercase text-xs text-white/20">Waiting...</span>
                 </div>
               ))}
@@ -1057,7 +1080,7 @@ const App: React.FC = () => {
             <div className="absolute inset-0 overflow-hidden opacity-10">
               {Array.from({ length: 12 }).map((_, i) => (
                 <motion.div 
-                  key={i} 
+                  key={`login-suit-${i}`} 
                   initial={{ 
                     top: `${Math.random() * 100}%`,
                     left: `${Math.random() * 100}%`,
@@ -1343,9 +1366,9 @@ const App: React.FC = () => {
                             <p className="text-[10px] font-black uppercase tracking-widest">No friends yet.<br/>Start building your crew!</p>
                           </div>
                         ) : (
-                          profile.friends.map((friend) => (
+                          profile.friends.map((friend, idx) => (
                             <motion.div 
-                              key={friend.id}
+                              key={`friend-${friend.id}-${idx}`}
                               initial={{ x: 20, opacity: 0 }}
                               animate={{ x: 0, opacity: 1 }}
                               className="glass-panel p-4 rounded-2xl border-white/5 flex items-center gap-4 group"
@@ -1391,9 +1414,9 @@ const App: React.FC = () => {
                           <p className="text-[10px] font-black uppercase tracking-widest">No pending requests.</p>
                         </div>
                       ) : (
-                        friendRequests.map((req) => (
+                        friendRequests.map((req, idx) => (
                           <motion.div 
-                            key={req.id}
+                            key={`req-${req.id}-${idx}`}
                             initial={{ x: 20, opacity: 0 }}
                             animate={{ x: 0, opacity: 1 }}
                             className="glass-panel p-4 rounded-2xl border-white/5 flex items-center gap-4"
@@ -1454,7 +1477,7 @@ const App: React.FC = () => {
           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full opacity-5">
             <div className="grid grid-cols-10 gap-12 rotate-12 scale-150">
               {Array.from({ length: 100 }).map((_, i) => (
-                <div key={i} className="text-2xl text-white/10 font-black select-none">
+                <div key={`game-bg-suit-${i}`} className="text-2xl text-white/10 font-black select-none">
                   {['♠', '♣', '♥', '♦'][i % 4]}
                 </div>
               ))}
@@ -1531,7 +1554,7 @@ const App: React.FC = () => {
             const isCurrentTurn = gameState.currentTurn === p.id;
             
             return (
-              <React.Fragment key={p.id}>
+              <React.Fragment key={`seat-${p.id}`}>
                 {/* Opponent Card Fan */}
                 {p.id !== 0 && (
                   <div className={`absolute ${fanPositions[i]} pointer-events-none z-20`}>
@@ -1594,7 +1617,7 @@ const App: React.FC = () => {
           </div>
 
           <div className="relative w-full h-full flex items-center justify-center pointer-events-none">
-            {gameState.currentTrick.map((t) => {
+            {gameState.currentTrick.map((t, idx) => {
               const offsets = [
                 "translate-y-[70px] md:translate-y-[120px]", // South
                 "-translate-x-[70px] md:-translate-x-[120px]", // West
@@ -1605,7 +1628,7 @@ const App: React.FC = () => {
               const isTrump = gameState.trumpSuit === t.card.suit;
               
               return (
-                <div key={t.playerId} className={`absolute z-[50] ${offsets[t.playerId]}`}>
+                <div key={`trick-card-${t.playerId}-${t.card.suit}-${t.card.rank}-${idx}`} className={`absolute z-[50] ${offsets[t.playerId]}`}>
                   <div className={`animate-deal ${isTrump ? 'animate-trump-play' : ''}`}>
                     <div className="relative">
                       <CardComponent 
