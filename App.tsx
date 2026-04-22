@@ -584,7 +584,7 @@ const App: React.FC = () => {
   const currentTrickWinnerId = useMemo(() => {
     if (!gameState || gameState.currentTrick.length === 0) return null;
     const trick = gameState.currentTrick;
-    const leadSuit = trick[0].card.suit;
+    const leadSuit = gameState.leadSuit || trick[0].card.suit;
     const trumpSuit = gameState.trumpSuit;
     
     let winnerId = trick[0].playerId;
@@ -609,7 +609,7 @@ const App: React.FC = () => {
       }
     });
     return winnerId;
-  }, [gameState?.currentTrick, gameState?.trumpSuit]);
+  }, [gameState?.currentTrick, gameState?.trumpSuit, gameState?.leadSuit]);
 
   const cleanupMic = useCallback(async () => {
     if (sessionRef.current) {
@@ -818,15 +818,25 @@ const App: React.FC = () => {
       let newTrump = currentData.trumpSuit;
       let players = [...currentData.players];
       
-      if (currentData.leadSuit && card.suit !== currentData.leadSuit && !currentData.trumpSuit) {
-        newTrump = card.suit;
-        setTrumpAlert({ suit: card.suit, playerName: currentData.players[playerId].name });
-        setIsThunderActive(true);
-        setTimeout(() => {
-          setIsThunderActive(false);
-          setTrumpAlert(null);
-        }, 1500);
-        players = players.map(p => ({ ...p, lastWinWasAce: false }));
+      const isCutting = currentData.leadSuit && card.suit !== currentData.leadSuit;
+      const trumpAnnouncedInThisTrick = currentData.trumpSuit && currentData.currentTrick.some(t => 
+        t.card.suit === currentData.trumpSuit && t.card.suit !== currentData.leadSuit
+      );
+
+      if (isCutting) {
+        const cutsInTrick = currentData.currentTrick.filter(t => t.card.suit !== currentData.leadSuit);
+        const highestCutValue = cutsInTrick.length > 0 ? Math.max(...cutsInTrick.map(t => t.card.value)) : 0;
+
+        if (!currentData.trumpSuit || (trumpAnnouncedInThisTrick && card.value > highestCutValue)) {
+          newTrump = card.suit;
+          setTrumpAlert({ suit: card.suit, playerName: currentData.players[playerId].name });
+          setIsThunderActive(true);
+          setTimeout(() => {
+            setIsThunderActive(false);
+            setTrumpAlert(null);
+          }, 1500);
+          players = players.map(p => ({ ...p, lastWinWasAce: false }));
+        }
       }
 
       players = players.map(p => p.id === playerId ? { ...p, hand: p.hand.filter(c => c.suit !== card.suit || c.rank !== card.rank) } : p);
