@@ -766,7 +766,8 @@ const App: React.FC = () => {
     const newGameState: GameState = {
       id: matchId,
       players, pile: [], wonPile: [], currentTrick: [],
-      trumpSuit: null, currentTurn: 0, leadSuit: null, roundStatus: 'playing',
+      trumpSuit: null, trumpRevealedInTrick: null, 
+      currentTurn: 0, leadSuit: null, roundStatus: 'playing',
       history: ["Match initialized."],
       lastWinner: null, stake: STAKE_AMOUNT * 4,
       tableCode: code,
@@ -816,19 +817,24 @@ const App: React.FC = () => {
       
       const currentData = matchDoc.data() as GameState;
       let newTrump = currentData.trumpSuit;
+      let newTrumpRevealed = currentData.trumpRevealedInTrick;
       let players = [...currentData.players];
       
+      const currentTrickIndex = currentData.wonPile.length / 4;
       const isCutting = currentData.leadSuit && card.suit !== currentData.leadSuit;
-      const trumpAnnouncedInThisTrick = currentData.trumpSuit && currentData.currentTrick.some(t => 
-        t.card.suit === currentData.trumpSuit && t.card.suit !== currentData.leadSuit
-      );
-
+      
       if (isCutting) {
         const cutsInTrick = currentData.currentTrick.filter(t => t.card.suit !== currentData.leadSuit);
         const highestCutValue = cutsInTrick.length > 0 ? Math.max(...cutsInTrick.map(t => t.card.value)) : 0;
 
-        if (!currentData.trumpSuit || (trumpAnnouncedInThisTrick && card.value > highestCutValue)) {
+        // Rule: Contestable Trump
+        // If trump not yet set, OR it was set in THIS trick and current card is higher
+        if (currentData.trumpSuit === null || 
+           (currentData.trumpRevealedInTrick === currentTrickIndex && card.value > highestCutValue)) {
+          
           newTrump = card.suit;
+          newTrumpRevealed = currentTrickIndex;
+          
           setTrumpAlert({ suit: card.suit, playerName: currentData.players[playerId].name });
           setIsThunderActive(true);
           setTimeout(() => {
@@ -848,6 +854,7 @@ const App: React.FC = () => {
         currentTrick: arrayUnion({ playerId, card }),
         leadSuit: currentData.leadSuit || card.suit,
         trumpSuit: newTrump,
+        trumpRevealedInTrick: newTrumpRevealed,
         currentTurn: nextTurn
       });
     } catch (err) {

@@ -63,6 +63,7 @@ export interface GameState {
   wonPile: Card[];
   currentTrick: { playerId: number; card: Card }[];
   trumpSuit: Suit | null;
+  trumpRevealedInTrick: number | null; // Index of the trick (wonPile.length / 4)
   currentTurn: number;
   leadSuit: Suit | null;
   roundStatus: 'playing' | 'ended';
