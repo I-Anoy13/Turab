@@ -1674,7 +1674,7 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        <div className="card-wing-container w-full max-w-[100vw] overflow-hidden">
+        <div className="card-wing-container w-full max-w-[100vw]">
           {playerHandSorted.map((card, idx) => {
             const isMyTurn = gameState.currentTurn === 0 && !isProcessing && gameState.currentTrick.length < 4;
             const isSelectable = isMyTurn && (!gameState.leadSuit || card.suit === gameState.leadSuit || !gameState.players[0].hand.some(c => c.suit === gameState.leadSuit));
@@ -1682,10 +1682,10 @@ const App: React.FC = () => {
             // Fanning logic
             const total = playerHandSorted.length;
             const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
-            const angleStep = isMobile ? 5 : 7;
+            const angleStep = isMobile ? 3.5 : 6;
             const startAngle = -((total - 1) * angleStep) / 2;
             const angle = startAngle + idx * angleStep;
-            const radius = isMobile ? 180 : 320;
+            const radius = isMobile ? 350 : 600;
             const x = radius * Math.sin((angle * Math.PI) / 180);
             const y = radius - radius * Math.cos((angle * Math.PI) / 180);
 
