@@ -1,5 +1,14 @@
 {
   "projects": {
     "default": "turab-d2f2c"
+  },
+  "targets": {
+    "turab-d2f2c": {
+      "hosting": {
+        "torab": [
+          "torab"
+        ]
+      }
+    }
   }
 }
