@@ -241,7 +241,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, { hasError: boolean; e
     }
 
     return (
-      <div className="h-full w-full relative">
+      <div className="h-[100dvh] w-full relative">
         <div className="scanlines"></div>
         <div className="vignette"></div>
         {this.props.children}
@@ -986,13 +986,14 @@ const App: React.FC = () => {
   }, [gameState, isProcessing, profile, syncProfileToCloud, auth.currentUser?.uid]);
 
   const watchAd = () => {
-    toast.loading("WATCHING AD...", { duration: 2000 });
+    const toastId = toast.loading("WATCHING AD...");
     setTimeout(() => {
       const updatedProfile = { ...profile, coins: profile.coins + 500 };
       setProfile(updatedProfile);
       syncProfileToCloud(updatedProfile);
+      toast.dismiss(toastId);
       toast.success("500 COINS RECEIVED!");
-    }, 2000);
+    }, 2500);
   };
 
   const renderView = () => {
@@ -1002,7 +1003,7 @@ const App: React.FC = () => {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="h-full w-full flex flex-col items-center justify-center bg-transparent p-8"
+          className="h-[100dvh] w-full flex flex-col items-center justify-center bg-transparent p-8"
         >
           <div className="relative">
             <motion.div 
@@ -1024,7 +1025,7 @@ const App: React.FC = () => {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="h-full w-full flex flex-col items-center justify-center bg-transparent p-8"
+          className="h-[100dvh] w-full flex flex-col items-center justify-center bg-transparent p-8"
         >
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
@@ -1068,7 +1069,7 @@ const App: React.FC = () => {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="h-full w-full flex flex-col items-center justify-center p-8 bg-transparent relative overflow-hidden"
+          className="h-[100dvh] w-full flex flex-col items-center justify-center p-8 bg-transparent relative overflow-hidden"
         >
           {/* Professional Card Game Background Visuals */}
           <div className="absolute inset-0 pointer-events-none z-0">
@@ -1209,7 +1210,7 @@ const App: React.FC = () => {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="h-full w-full flex flex-col items-center justify-between p-8 bg-transparent relative overflow-hidden"
+          className="h-[100dvh] w-full flex flex-col items-center justify-between p-8 bg-transparent relative overflow-hidden"
         >
           {/* Professional Card Game Background Visuals */}
           <div className="absolute inset-0 pointer-events-none z-0">
@@ -1482,7 +1483,7 @@ const App: React.FC = () => {
     }
 
     return (
-      <div className="h-full w-full relative bg-transparent flex flex-col items-center justify-center overflow-hidden">
+      <div className="h-[100dvh] w-full relative bg-transparent flex flex-col items-center justify-center overflow-hidden">
         {/* Professional Card Game Background Visuals - Game View */}
         <div className="absolute inset-0 pointer-events-none opacity-20 z-0">
           <div className="absolute top-[-10%] left-[-10%] w-[30%] h-[30%] rotate-45 blur-xl">
@@ -1682,10 +1683,10 @@ const App: React.FC = () => {
             // Fanning logic
             const total = playerHandSorted.length;
             const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
-            const angleStep = isMobile ? 3.5 : 6;
+            const angleStep = isMobile ? 4.5 : 6;
             const startAngle = -((total - 1) * angleStep) / 2;
             const angle = startAngle + idx * angleStep;
-            const radius = isMobile ? 350 : 600;
+            const radius = isMobile ? 450 : 600;
             const x = radius * Math.sin((angle * Math.PI) / 180);
             const y = radius - radius * Math.cos((angle * Math.PI) / 180);
 
