@@ -263,7 +263,7 @@ const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const resolvingTrickRef = useRef<string | null>(null);
-  const [trumpAlert, setTrumpAlert] = useState<{ suit: Suit; playerName: string } | null>(null);
+  const [trumpAlert, setTrumpAlert] = useState<{ suit: Suit; playerName: string; type: 'announced' | 'challenged' } | null>(null);
   const [isThunderActive, setIsThunderActive] = useState(false);
   
   // Login State
@@ -853,17 +853,20 @@ const App: React.FC = () => {
       
       if (isCutting) {
         const cutsInTrick = currentData.currentTrick.filter(t => t.card.suit !== currentData.leadSuit);
-        const highestCutValue = cutsInTrick.length > 0 ? Math.max(...cutsInTrick.map(t => t.card.value)) : 0;
+        const isAnnouncement = currentData.trumpSuit === null;
+        const isChallenge = currentData.trumpSuit !== null && 
+                          currentData.trumpRevealedInTrick === currentTrickIndex && 
+                          cutsInTrick.length === 1;
 
-        // Rule: Contestable Trump
-        // If trump not yet set, OR it was set in THIS trick and current card is higher
-        if (currentData.trumpSuit === null || 
-           (currentData.trumpRevealedInTrick === currentTrickIndex && card.value > highestCutValue)) {
-          
+        if (isAnnouncement || (isChallenge && card.value > cutsInTrick[0].card.value)) {
           newTrump = card.suit;
           newTrumpRevealed = currentTrickIndex;
           
-          setTrumpAlert({ suit: card.suit, playerName: currentData.players[playerId].name });
+          setTrumpAlert({ 
+            suit: card.suit, 
+            playerName: currentData.players[playerId].name,
+            type: isAnnouncement ? 'announced' : 'challenged'
+          });
           setIsThunderActive(true);
           setTimeout(() => {
             setIsThunderActive(false);
@@ -1764,7 +1767,9 @@ const App: React.FC = () => {
             <div className="glass-panel p-4 px-8 rounded-3xl border-2 border-indigo-500/50 flex items-center gap-4 shadow-2xl animate-bounce">
               <span className="text-4xl text-indigo-400">{suitIcons[trumpAlert.suit]}</span>
               <div className="text-left">
-                <div className="text-[8px] font-black text-indigo-400 uppercase tracking-widest">TRUMP ANNOUNCED</div>
+                <div className="text-[8px] font-black text-indigo-400 uppercase tracking-widest">
+                  {trumpAlert.type === 'announced' ? 'TRUMP ANNOUNCED' : 'TRUMP CHALLENGED'}
+                </div>
                 <div className="text-2xl font-black uppercase">{trumpAlert.suit}</div>
               </div>
             </div>
