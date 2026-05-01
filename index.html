@@ -136,11 +136,11 @@
 
         .card-wing-container {
             position: fixed;
-            bottom: 35vh; /* Moved significantly higher up from the bottom to avoid nav bars */
+            bottom: 5vh; /* Moved down to avoid overlapping the table */
             left: 50%;
             transform: translateX(-50%);
             width: 100vw;
-            height: 200px;
+            height: 180px;
             display: flex;
             justify-content: center;
             align-items: flex-end;
@@ -150,10 +150,10 @@
         @media (min-width: 768px) {
             .card-wing-container {
                 position: absolute;
-                bottom: 180px;
+                bottom: 20px; /* Moved down on desktop as well */
                 max-width: 600px;
                 width: 100%;
-                height: 200px;
+                height: 180px;
             }
         }
         .wing-card {

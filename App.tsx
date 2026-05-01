@@ -1723,14 +1723,14 @@ const App: React.FC = () => {
             const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
             
             // Dynamic angle step to fit all cards on screen
-            const maxSpan = isMobile ? 40 : 70;
-            const angleStep = Math.min(isMobile ? 4.0 : 5.5, maxSpan / Math.max(total, 1)); 
+            const maxSpan = isMobile ? 30 : 50;
+            const angleStep = Math.min(isMobile ? 2.5 : 4.0, maxSpan / Math.max(total, 1)); 
             
             const startAngle = -((total - 1) * angleStep) / 2;
             const angle = startAngle + idx * angleStep;
             
             // Adjust radius for a smooth bowl shape (arc down style)
-            const radius = isMobile ? 550 : 800; 
+            const radius = isMobile ? 700 : 1000; 
             const x = radius * Math.sin((angle * Math.PI) / 180);
             const y = radius - radius * Math.cos((angle * Math.PI) / 180);
 
