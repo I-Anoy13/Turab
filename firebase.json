@@ -1,6 +1,5 @@
 {
   "hosting": {
-    "target": "torab",
     "public": "dist",
     "ignore": [
       "firebase.json",
