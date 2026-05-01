@@ -300,6 +300,18 @@ const App: React.FC = () => {
   const [friendSearch, setFriendSearch] = useState('');
   const [isSearchingFriend, setIsSearchingFriend] = useState(false);
   const [friendsTab, setFriendsTab] = useState<'list' | 'requests'>('list');
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   const addFriend = async () => {
     if (!friendSearch) return;
@@ -490,38 +502,54 @@ const App: React.FC = () => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         const path = `users/${user.uid}`;
-        try {
-          const userRef = doc(db, 'users', user.uid);
-          const userSnap = await getDoc(userRef);
-          
-          if (userSnap.exists()) {
-            const cloudProfile = userSnap.data() as UserProfile;
-            if (user.email === 'anoypak3@gmail.com' && cloudProfile.role !== 'admin') {
-              cloudProfile.role = 'admin';
-              syncProfileToCloud(cloudProfile);
+        let retryCount = 0;
+        const maxRetries = 3;
+
+        const fetchProfile = async () => {
+          try {
+            const userRef = doc(db, 'users', user.uid);
+            const userSnap = await getDoc(userRef);
+            
+            if (userSnap.exists()) {
+              const cloudProfile = userSnap.data() as UserProfile;
+              if (user.email === 'anoypak3@gmail.com' && cloudProfile.role !== 'admin') {
+                cloudProfile.role = 'admin';
+                syncProfileToCloud(cloudProfile);
+              }
+              setProfile(cloudProfile);
+            } else {
+              setProfile(prev => {
+                const newProfile: UserProfile = {
+                  ...prev,
+                  turab_id: user.uid,
+                  username: signupUsernameRef.current || user.displayName || user.email?.split('@')[0] || 'Elite Player',
+                  role: user.email === 'anoypak3@gmail.com' ? 'admin' : 'user',
+                  friends: []
+                };
+                syncProfileToCloud(newProfile);
+                setSignupUsername(''); 
+                return newProfile;
+              });
             }
-            setProfile(cloudProfile);
-          } else {
-            setProfile(prev => {
-              const newProfile: UserProfile = {
-                ...prev,
-                turab_id: user.uid,
-                username: signupUsernameRef.current || user.displayName || user.email?.split('@')[0] || 'Elite Player',
-                role: user.email === 'anoypak3@gmail.com' ? 'admin' : 'user',
-                friends: []
-              };
-              syncProfileToCloud(newProfile);
-              setSignupUsername(''); // Clear after use
-              return newProfile;
-            });
+            setView('home');
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            if (errMsg.toLowerCase().includes('offline') && retryCount < maxRetries) {
+              retryCount++;
+              console.warn(`Firestore offline, retrying fetch (${retryCount}/${maxRetries})...`);
+              setTimeout(fetchProfile, 2000 * retryCount);
+            } else {
+              handleFirestoreError(err, OperationType.GET, path);
+              toast.error("Cloud connection issue. Operating in limited mode.");
+              // Don't force sign out immediately, maybe it's temporary
+              if (retryCount >= maxRetries) {
+                setView('home'); // Try to let them play with local profile
+              }
+            }
           }
-          setView('home');
-        } catch (err) {
-          handleFirestoreError(err, OperationType.GET, path);
-          toast.error("Failed to load profile. Please try logging in again.");
-          await signOut(auth);
-          setView('login');
-        }
+        };
+
+        fetchProfile();
       } else {
         setView('login');
       }
@@ -987,13 +1015,14 @@ const App: React.FC = () => {
 
   const watchAd = () => {
     const toastId = toast.loading("WATCHING AD...");
+    
     setTimeout(() => {
       const updatedProfile = { ...profile, coins: profile.coins + 500 };
       setProfile(updatedProfile);
       syncProfileToCloud(updatedProfile);
-      toast.dismiss(toastId);
-      toast.success("500 COINS RECEIVED!");
-    }, 2500);
+      
+      toast.success("500 COINS RECEIVED!", { id: toastId });
+    }, 2000);
   };
 
   const renderView = () => {
@@ -1247,6 +1276,11 @@ const App: React.FC = () => {
             animate={{ y: 0, opacity: 1 }}
             className="text-center mt-6 md:mt-10 z-10 relative"
           >
+            {isOffline && (
+              <div className="mb-4 bg-red-500/20 border border-red-500/30 text-red-500 px-4 py-1.5 rounded-full text-[8px] font-black uppercase tracking-widest inline-flex items-center gap-2 animate-pulse">
+                <span className="w-2 h-2 rounded-full bg-red-500"></span> INTERNET DISCONNECTED
+              </div>
+            )}
             <h1 className="text-5xl md:text-8xl turab-title font-black italic tracking-tighter">TURAB'</h1>
             <p className="text-indigo-400 font-black uppercase tracking-[0.5em] text-[10px] mt-2 opacity-60">Elite Card Series</p>
           </motion.div>
@@ -1683,10 +1717,10 @@ const App: React.FC = () => {
             // Fanning logic
             const total = playerHandSorted.length;
             const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
-            const angleStep = isMobile ? 4.5 : 6;
+            const angleStep = isMobile ? 4.0 : 5.0; 
             const startAngle = -((total - 1) * angleStep) / 2;
             const angle = startAngle + idx * angleStep;
-            const radius = isMobile ? 450 : 600;
+            const radius = isMobile ? 320 : 500; 
             const x = radius * Math.sin((angle * Math.PI) / 180);
             const y = radius - radius * Math.cos((angle * Math.PI) / 180);
 
