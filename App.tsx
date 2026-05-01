@@ -1171,7 +1171,7 @@ const App: React.FC = () => {
               <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500/20 to-purple-500/20 rounded-[3rem] blur opacity-0 group-hover:opacity-100 transition duration-1000"></div>
               <div className="relative">
                 <h2 className="text-xl font-black uppercase tracking-widest mb-8 text-white/80">
-                  {isSignUp ? 'Create Account' : 'Authorize Access'}
+                  {isSignUp ? 'Register for Gaming App' : 'Log In'}
                 </h2>
                 <div className="space-y-4">
                   {isSignUp && (
@@ -1187,14 +1187,14 @@ const App: React.FC = () => {
                     type="email" 
                     value={loginEmail}
                     onChange={e => setLoginEmail(e.target.value)}
-                    placeholder="PLAYER EMAIL" 
+                    placeholder="EMAIL" 
                     className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-sm font-black outline-none focus:border-indigo-500/50 focus:bg-white/10 transition-all uppercase placeholder:text-white/20" 
                   />
                   <input 
                     type="password" 
                     value={loginPass}
                     onChange={e => setLoginPass(e.target.value)}
-                    placeholder="ACCESS KEY" 
+                    placeholder="PASSWORD" 
                     className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-sm font-black outline-none focus:border-indigo-500/50 focus:bg-white/10 transition-all uppercase placeholder:text-white/20" 
                   />
                   <motion.button 
@@ -1203,7 +1203,7 @@ const App: React.FC = () => {
                     disabled={!loginEmail || !loginPass || (isSignUp && !signupUsername) || isLoggingIn}
                     className="gold-button w-full py-5 rounded-2xl text-lg mt-2 disabled:opacity-50 shadow-[0_10px_20px_rgba(251,191,36,0.2)]"
                   >
-                    {isLoggingIn ? (isSignUp ? 'CREATING...' : 'SECURE HANDSHAKE...') : (isSignUp ? 'SIGN UP' : 'ENTER ARENA')}
+                    {isLoggingIn ? (isSignUp ? 'CREATING...' : 'LOGGING IN...') : (isSignUp ? 'REGISTER' : 'LOG IN')}
                   </motion.button>
                   
                   <div className="pt-4">
@@ -1282,7 +1282,7 @@ const App: React.FC = () => {
               </div>
             )}
             <h1 className="text-5xl md:text-8xl turab-title font-black italic tracking-tighter">TURAB'</h1>
-            <p className="text-indigo-400 font-black uppercase tracking-[0.5em] text-[10px] mt-2 opacity-60">Elite Card Series</p>
+            <p className="text-indigo-400 font-black uppercase tracking-[0.5em] text-[10px] mt-2 opacity-60">Pro Gaming App</p>
           </motion.div>
 
           <motion.div 
@@ -1325,26 +1325,27 @@ const App: React.FC = () => {
                 onClick={() => startNewGame('classic')} 
                 className="gold-button w-full py-7 rounded-[2rem] text-2xl shadow-[0_15px_30px_rgba(217,119,6,0.3)] transition-all"
               >
-                Quick Start
+                Play Now
               </motion.button>
               
               <div className="grid grid-cols-2 gap-4">
                 <motion.button whileHover={{ y: -2 }} onClick={() => startNewGame('private')} className="glass-panel py-5 rounded-2xl text-[10px] font-black uppercase border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10 transition-all">
-                  Private Arena
+                  Private Lobby
                 </motion.button>
                 <motion.button whileHover={{ y: -2 }} onClick={() => setIsFriendsOpen(true)} className="glass-panel py-5 rounded-2xl text-[10px] font-black uppercase border-white/10 hover:bg-white/5 transition-all">
-                  Friends List
+                  Friends
                 </motion.button>
               </div>
 
-              <motion.button whileHover={{ opacity: 1 }} onClick={watchAd} className="w-full py-4 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 text-[10px] font-black uppercase text-indigo-400/60 hover:text-indigo-400 hover:bg-indigo-600/20 transition-all">
-                📺 Watch Ad (+500 Coins)
-              </motion.button>
+              <div className="grid grid-cols-2 gap-4">
+                <motion.button whileHover={{ opacity: 1 }} onClick={watchAd} className="py-4 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 text-[10px] font-black uppercase text-indigo-400/60 hover:text-indigo-400 hover:bg-indigo-600/20 transition-all">
+                  📺 Free Coins
+                </motion.button>
+                <motion.button whileHover={{ opacity: 1 }} onClick={handleLogout} className="py-4 rounded-2xl bg-red-600/10 border border-red-500/20 text-[10px] font-black uppercase text-red-400/60 hover:text-red-400 hover:bg-red-600/20 transition-all">
+                  📤 Logout
+                </motion.button>
+              </div>
             </div>
-
-            <button onClick={handleLogout} className="w-full py-4 text-[8px] font-black uppercase text-white/10 hover:text-red-400/60 transition-colors">
-              Sign Out Securely
-            </button>
           </motion.div>
 
           {/* Friends Drawer */}
