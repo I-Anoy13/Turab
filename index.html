@@ -136,39 +136,42 @@
 
         .card-wing-container {
             position: fixed;
-            bottom: 5vh; /* Moved down to avoid overlapping the table */
+            bottom: -50px; /* Sunk down to hide most of the card body on mobile */
             left: 50%;
             transform: translateX(-50%);
             width: 100vw;
-            height: 180px;
+            height: 120px;
             display: flex;
             justify-content: center;
             align-items: flex-end;
             z-index: 500;
             pointer-events: none;
+            transition: bottom 0.3s ease;
         }
         @media (min-width: 768px) {
             .card-wing-container {
                 position: absolute;
-                bottom: 20px; /* Moved down on desktop as well */
+                bottom: -70px; /* Sunk down on desktop */
                 max-width: 600px;
                 width: 100%;
-                height: 180px;
+                height: 140px;
             }
         }
         .wing-card {
             position: absolute;
             bottom: 0;
-            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), filter 0.3s ease;
+            transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), filter 0.3s ease, z-index 0s;
             pointer-events: auto;
             transform-origin: bottom center;
         }
         .wing-card:hover {
-            z-index: 1000 !important;
-            filter: brightness(1.2);
+            z-index: 2000 !important;
+            filter: brightness(1.2) drop-shadow(0 0 10px rgba(255,255,255,0.4));
         }
+        /* When hovering, pull the card up significantly */
         .wing-card:hover > div {
-            transform: translateY(-20px) scale(1.1) rotate(0deg) !important;
+            transform: translateY(-80px) scale(1.15) rotate(0deg) !important;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.8);
         }
 
         @keyframes lightning-flash {

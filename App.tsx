@@ -1723,25 +1723,30 @@ const App: React.FC = () => {
             const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
             
             // Dynamic angle step to fit all cards on screen
-            const maxSpan = isMobile ? 30 : 50;
-            const angleStep = Math.min(isMobile ? 2.5 : 4.0, maxSpan / Math.max(total, 1)); 
+            // Tightened fanning (lower maxSpan, smaller angles)
+            const maxSpan = isMobile ? 24 : 40;
+            const angleStep = Math.min(isMobile ? 2.0 : 3.0, maxSpan / Math.max(total, 1)); 
             
             const startAngle = -((total - 1) * angleStep) / 2;
             const angle = startAngle + idx * angleStep;
             
-            // Adjust radius for a smooth bowl shape (arc down style)
-            const radius = isMobile ? 700 : 1000; 
+            // Adjust radius for a smooth bowl shape
+            const radius = isMobile ? 800 : 1200; 
             const x = radius * Math.sin((angle * Math.PI) / 180);
             const y = radius - radius * Math.cos((angle * Math.PI) / 180);
 
             const isTrump = gameState.trumpSuit === card.suit;
+            
+            // Pop-up logic: Highlight cards that match the lead suit or are playable
+            const isHighlighted = isMyTurn && gameState.leadSuit && card.suit === gameState.leadSuit;
+            const popupOffset = isHighlighted ? (isMobile ? -20 : -35) : 0;
 
             return (
               <div 
                 key={`${card.suit}-${card.rank}-${idx}`} 
                 className="wing-card"
                 style={{
-                  transform: `translate(${x}px, ${y}px) rotate(${angle}deg)`,
+                  transform: `translate(${x}px, ${y + popupOffset}px) rotate(${angle}deg)`,
                   zIndex: idx
                 }}
               >
