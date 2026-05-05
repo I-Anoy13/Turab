@@ -265,6 +265,7 @@ const App: React.FC = () => {
   const resolvingTrickRef = useRef<string | null>(null);
   const [trumpAlert, setTrumpAlert] = useState<{ suit: Suit; playerName: string; type: 'announced' | 'challenged' } | null>(null);
   const [isThunderActive, setIsThunderActive] = useState(false);
+  const [hoveredSuit, setHoveredSuit] = useState<Suit | null>(null);
   
   // Login State
   const [loginEmail, setLoginEmail] = useState('');
@@ -1724,30 +1725,38 @@ const App: React.FC = () => {
             
             // Dynamic angle step to fit all cards on screen
             // Tightened fanning (lower maxSpan, smaller angles)
-            const maxSpan = isMobile ? 24 : 40;
-            const angleStep = Math.min(isMobile ? 2.0 : 3.0, maxSpan / Math.max(total, 1)); 
+            const maxSpan = isMobile ? 28 : 45;
+            const angleStep = Math.min(isMobile ? 2.5 : 3.5, maxSpan / Math.max(total, 1)); 
             
             const startAngle = -((total - 1) * angleStep) / 2;
             const angle = startAngle + idx * angleStep;
             
             // Adjust radius for a smooth bowl shape
-            const radius = isMobile ? 800 : 1200; 
+            const radius = isMobile ? 600 : 900; 
             const x = radius * Math.sin((angle * Math.PI) / 180);
             const y = radius - radius * Math.cos((angle * Math.PI) / 180);
 
             const isTrump = gameState.trumpSuit === card.suit;
             
-            // Pop-up logic: Highlight cards that match the lead suit or are playable
-            const isHighlighted = isMyTurn && gameState.leadSuit && card.suit === gameState.leadSuit;
-            const popupOffset = isHighlighted ? (isMobile ? -20 : -35) : 0;
+            // Pop-up logic: 
+            // 1. Hovered suit (user interaction)
+            // 2. Lead suit (gameplay focus)
+            const isSuitHovered = hoveredSuit && card.suit === hoveredSuit;
+            const isLeadSuitPop = isMyTurn && gameState.leadSuit && card.suit === gameState.leadSuit;
+            
+            const popupOffset = (isSuitHovered || isLeadSuitPop) ? (isMobile ? -35 : -55) : 0;
 
             return (
               <div 
                 key={`${card.suit}-${card.rank}-${idx}`} 
                 className="wing-card"
+                onMouseEnter={() => setHoveredSuit(card.suit)}
+                onMouseLeave={() => setHoveredSuit(null)}
+                onTouchStart={() => setHoveredSuit(card.suit)}
+                onTouchEnd={() => setHoveredSuit(null)}
                 style={{
                   transform: `translate(${x}px, ${y + popupOffset}px) rotate(${angle}deg)`,
-                  zIndex: idx
+                  zIndex: (isSuitHovered || isLeadSuitPop) ? 2000 : idx
                 }}
               >
                 <CardComponent 
