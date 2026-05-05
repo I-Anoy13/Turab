@@ -23,7 +23,8 @@
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; margin: 0; padding: 0; -webkit-touch-callout: none; }
         body {
             font-family: 'Outfit', sans-serif;
-            background: radial-gradient(circle at center, #0f172a 0%, #02040a 100%);
+            background: #0a0c1a;
+            background: radial-gradient(circle at center, #1e293b 0%, #020617 100%);
             color: white;
             overflow: hidden;
             width: 100vw;
@@ -37,12 +38,13 @@
             content: "";
             position: absolute;
             inset: 0;
-            background: 
-                radial-gradient(circle at 20% 20%, rgba(99, 102, 241, 0.1) 0%, transparent 40%),
-                radial-gradient(circle at 80% 80%, rgba(168, 85, 247, 0.1) 0%, transparent 40%),
-                radial-gradient(circle at 50% 50%, rgba(6, 78, 59, 0.05) 0%, transparent 60%);
+            background-image: 
+                radial-gradient(circle at 10% 10%, rgba(99, 102, 241, 0.05) 0%, transparent 50%),
+                radial-gradient(circle at 90% 90%, rgba(168, 85, 247, 0.05) 0%, transparent 50%),
+                linear-gradient(rgba(255,255,255,0.01) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.01) 1px, transparent 1px);
+            background-size: 100% 100%, 100% 100%, 40px 40px, 40px 40px;
             z-index: -1;
-            animation: bg-drift 20s infinite alternate ease-in-out;
             pointer-events: none;
         }
         body::after {
@@ -124,19 +126,27 @@
         }
 
         .felt-table {
-            background: radial-gradient(circle at center, #065f46 0%, #022c22 60%, #011c12 100%);
+            background: radial-gradient(circle at center, #064e3b 0%, #022c22 70%, #011c12 100%);
             box-shadow: 
-                inset 0 0 120px rgba(0,0,0,0.9), 
-                0 0 80px rgba(6, 95, 70, 0.3);
-            border: 8px solid #1a1412;
+                inset 0 0 100px rgba(0,0,0,0.8),
+                0 30px 60px rgba(0,0,0,0.6),
+                0 0 0 10px rgba(255,255,255,0.03);
+            border: 4px solid #1e293b;
             position: relative;
-            outline: 1px solid rgba(251, 191, 36, 0.1);
-            transition: all 0.8s cubic-bezier(0.19, 1, 0.22, 1);
+            transform: perspective(1000px) rotateX(8deg);
+        }
+        .felt-table::before {
+            content: '';
+            position: absolute;
+            inset: -4px;
+            border-radius: inherit;
+            border: 2px solid rgba(255,215,0,0.05);
+            pointer-events: none;
         }
 
         .card-wing-container {
             position: fixed;
-            bottom: 15vh; /* Elevated high to bring cards closer to the table center */
+            bottom: 18vh; /* Raised further to be very visible and touching table bottom */
             left: 50%;
             transform: translateX(-50%);
             width: 100vw;
@@ -151,7 +161,7 @@
         @media (min-width: 768px) {
             .card-wing-container {
                 position: absolute;
-                bottom: 10vh; /* Raised significantly on desktop */
+                bottom: 12vh; /* Raised significantly on desktop */
                 max-width: 600px;
                 width: 100%;
                 height: 200px;

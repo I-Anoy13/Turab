@@ -1580,7 +1580,7 @@ const App: React.FC = () => {
           </button>
         </div>
 
-        <div className={`felt-table mt-[-50px] w-[280px] h-[280px] md:w-[480px] md:h-[480px] rounded-full flex items-center justify-center relative z-10 ${isThunderActive ? 'thunder-active' : ''}`}>
+        <div className={`felt-table mt-[-80px] w-[320px] h-[320px] md:w-[550px] md:h-[550px] rounded-full flex items-center justify-center relative z-10 ${isThunderActive ? 'thunder-active' : ''}`}>
           {/* Trump Indicator - Eye Catching */}
           {gameState.trumpSuit && (
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none select-none z-0">
@@ -1735,7 +1735,7 @@ const App: React.FC = () => {
             const angle = startAngle + idx * angleStep;
             
             // Adjust radius for a smooth bowl shape
-            const radius = isMobile ? 600 : 900; 
+            const radius = isMobile ? 500 : 800; 
             const x = radius * Math.sin((angle * Math.PI) / 180);
             const y = radius - radius * Math.cos((angle * Math.PI) / 180);
 
@@ -1749,14 +1749,18 @@ const App: React.FC = () => {
             
             const popupOffset = (isSuitHovered || isLeadSuitPop) ? (isMobile ? -35 : -55) : 0;
 
+            const handleCardPlay = () => {
+              setHoveredSuit(null);
+              playCard(0, card);
+            };
+
             return (
               <div 
                 key={`${card.suit}-${card.rank}-${idx}`} 
                 className="wing-card"
+                data-suit={card.suit}
                 onMouseEnter={() => setHoveredSuit(card.suit)}
                 onMouseLeave={() => setHoveredSuit(null)}
-                onTouchStart={() => setHoveredSuit(card.suit)}
-                onTouchEnd={() => setHoveredSuit(null)}
                 style={{
                   transform: `translate(${x}px, ${y + popupOffset}px) rotate(${angle}deg)`,
                   zIndex: (isSuitHovered || isLeadSuitPop) ? 2000 : idx
@@ -1765,10 +1769,7 @@ const App: React.FC = () => {
                 <CardComponent 
                   card={card} 
                   skin={profile.activeSkin} 
-                  onClick={() => {
-                    setHoveredSuit(null);
-                    playCard(0, card);
-                  }}
+                  onClick={handleCardPlay} 
                   disabled={!isSelectable && isMyTurn} 
                   className={`${isMobile ? "scale-[0.75]" : ""} ${isTrump ? 'ring-2 ring-indigo-400 shadow-[0_0_15px_rgba(99,102,241,0.6)]' : ''}`}
                 />
@@ -1781,6 +1782,22 @@ const App: React.FC = () => {
             );
           })}
         </div>
+
+        {/* Global Touch Handler for Sliding across cards */}
+        <div 
+          className="fixed inset-0 pointer-events-none" 
+          style={{ zIndex: 400 }}
+          onTouchMove={(e) => {
+            const touch = e.touches[0];
+            const elem = document.elementFromPoint(touch.clientX, touch.clientY);
+            const cardElem = elem?.closest('.wing-card');
+            if (cardElem) {
+              const suit = cardElem.getAttribute('data-suit') as Suit;
+              if (suit) setHoveredSuit(suit);
+            }
+          }}
+          onTouchEnd={() => setHoveredSuit(null)}
+        />
 
         {trumpAlert && (
           <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[2000] pointer-events-none">
