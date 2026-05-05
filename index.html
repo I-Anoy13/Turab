@@ -126,14 +126,15 @@
         }
 
         .felt-table {
-            background: radial-gradient(circle at center, #064e3b 0%, #022c22 70%, #011c12 100%);
+            background: radial-gradient(circle at center, #065f46 0%, #022c22 75%, #011c12 100%);
             box-shadow: 
                 inset 0 0 100px rgba(0,0,0,0.8),
-                0 30px 60px rgba(0,0,0,0.6),
-                0 0 0 10px rgba(255,255,255,0.03);
-            border: 4px solid #1e293b;
+                0 40px 100px rgba(0,0,0,0.8),
+                0 0 0 12px #1e293b,
+                0 0 0 14px rgba(255,215,0,0.1);
+            border: 1px solid rgba(255,255,255,0.05);
             position: relative;
-            transform: perspective(1000px) rotateX(8deg);
+            transform: perspective(1200px) rotateX(12deg);
         }
         .felt-table::before {
             content: '';
@@ -146,7 +147,7 @@
 
         .card-wing-container {
             position: fixed;
-            bottom: 18vh; /* Raised further to be very visible and touching table bottom */
+            bottom: 18vh;
             left: 50%;
             transform: translateX(-50%);
             width: 100vw;
@@ -155,7 +156,7 @@
             justify-content: center;
             align-items: flex-end;
             z-index: 500;
-            pointer-events: none;
+            pointer-events: auto;
             transition: bottom 0.3s ease;
         }
         @media (min-width: 768px) {

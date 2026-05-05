@@ -1717,7 +1717,19 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        <div className="card-wing-container w-full max-w-[100vw]">
+        <div 
+          className="card-wing-container w-full max-w-[100vw]"
+          onTouchMove={(e) => {
+            const touch = e.touches[0];
+            const elem = document.elementFromPoint(touch.clientX, touch.clientY);
+            const cardElem = elem?.closest('.wing-card');
+            if (cardElem) {
+              const suit = cardElem.getAttribute('data-suit') as Suit;
+              if (suit) setHoveredSuit(suit);
+            }
+          }}
+          onTouchEnd={() => setHoveredSuit(null)}
+        >
           {playerHandSorted.map((card, idx) => {
             const isMyTurn = gameState.currentTurn === 0 && !isProcessing && gameState.currentTrick.length < 4;
             const isSelectable = isMyTurn && (!gameState.leadSuit || card.suit === gameState.leadSuit || !gameState.players[0].hand.some(c => c.suit === gameState.leadSuit));
@@ -1782,22 +1794,6 @@ const App: React.FC = () => {
             );
           })}
         </div>
-
-        {/* Global Touch Handler for Sliding across cards */}
-        <div 
-          className="fixed inset-0 pointer-events-none" 
-          style={{ zIndex: 400 }}
-          onTouchMove={(e) => {
-            const touch = e.touches[0];
-            const elem = document.elementFromPoint(touch.clientX, touch.clientY);
-            const cardElem = elem?.closest('.wing-card');
-            if (cardElem) {
-              const suit = cardElem.getAttribute('data-suit') as Suit;
-              if (suit) setHoveredSuit(suit);
-            }
-          }}
-          onTouchEnd={() => setHoveredSuit(null)}
-        />
 
         {trumpAlert && (
           <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[2000] pointer-events-none">
