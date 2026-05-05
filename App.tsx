@@ -855,6 +855,9 @@ const App: React.FC = () => {
       if (isCutting) {
         const cutsInTrick = currentData.currentTrick.filter(t => t.card.suit !== currentData.leadSuit);
         const isAnnouncement = currentData.trumpSuit === null;
+        
+        // A challenge is ONLY possible in the exact same trick where trump was first announced
+        // and only if THIS is the second player to cut in that trick.
         const isChallenge = currentData.trumpSuit !== null && 
                           currentData.trumpRevealedInTrick === currentTrickIndex && 
                           cutsInTrick.length === 1;
@@ -1161,16 +1164,16 @@ const App: React.FC = () => {
             initial={{ y: 20, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             transition={{ delay: 0.2 }}
-            className="w-full max-w-md z-10 space-y-12 text-center relative"
+            className="w-full max-w-md z-10 space-y-6 text-center relative"
           >
-            <div className="space-y-2">
-              <h1 className="text-6xl md:text-9xl turab-title font-black italic tracking-tighter">TURAB'</h1>
-              <p className="text-indigo-400 font-black uppercase tracking-[0.5em] text-[10px] opacity-60">Elite Card Series</p>
+            <div className="space-y-1">
+              <h1 className="text-6xl md:text-8xl turab-title font-black italic tracking-tighter">TURAB'</h1>
+              <p className="text-indigo-400 font-black uppercase tracking-[0.4em] text-[8px] opacity-60">Elite Card Series</p>
             </div>
             
             <motion.div 
               whileHover={{ scale: 1.01 }}
-              className="glass-panel p-6 md:p-10 rounded-3xl md:rounded-[3rem] border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] relative group"
+              className="glass-panel p-6 md:p-8 rounded-3xl md:rounded-[2.5rem] border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] relative group"
             >
               <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500/20 to-purple-500/20 rounded-[3rem] blur opacity-0 group-hover:opacity-100 transition duration-1000"></div>
               <div className="relative">
@@ -1278,40 +1281,40 @@ const App: React.FC = () => {
           <motion.div 
             initial={{ y: -20, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
-            className="text-center mt-6 md:mt-10 z-10 relative"
+            className="text-center mt-4 md:mt-6 z-10 relative"
           >
             {isOffline && (
               <div className="mb-4 bg-red-500/20 border border-red-500/30 text-red-500 px-4 py-1.5 rounded-full text-[8px] font-black uppercase tracking-widest inline-flex items-center gap-2 animate-pulse">
                 <span className="w-2 h-2 rounded-full bg-red-500"></span> INTERNET DISCONNECTED
               </div>
             )}
-            <h1 className="text-5xl md:text-8xl turab-title font-black italic tracking-tighter">TURAB'</h1>
-            <p className="text-indigo-400 font-black uppercase tracking-[0.5em] text-[10px] mt-2 opacity-60">Pro Gaming App</p>
+            <h1 className="text-5xl md:text-7xl turab-title font-black italic tracking-tighter">TURAB'</h1>
+            <p className="text-indigo-400 font-black uppercase tracking-[0.4em] text-[8px] mt-1 opacity-60">Pro Gaming App</p>
           </motion.div>
 
           <motion.div 
             initial={{ y: 20, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             transition={{ delay: 0.2 }}
-            className="w-full max-w-md space-y-6 z-10"
+            className="w-full max-w-sm space-y-4 z-10"
           >
             <motion.div 
               whileHover={{ scale: 1.02 }}
-              className="glass-panel p-6 md:p-8 rounded-3xl md:rounded-[2.5rem] border-white/10 flex items-center gap-6 shadow-2xl relative overflow-hidden group"
+              className="glass-panel p-5 md:p-6 rounded-3xl border-white/10 flex items-center gap-4 shadow-2xl relative overflow-hidden group"
             >
               <div className="absolute inset-0 bg-gradient-to-br from-indigo-600/5 to-purple-600/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-              <div className="w-20 h-20 rounded-3xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-4xl shadow-inner relative z-10">
+              <div className="w-14 h-14 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-2xl shadow-inner relative z-10">
                 👤
-                <div className="absolute -bottom-2 -right-2 w-8 h-8 rounded-full bg-indigo-600 border-2 border-[#0a0f1e] flex items-center justify-center text-[10px] font-black">
+                <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-indigo-600 border-2 border-[#0a0f1e] flex items-center justify-center text-[8px] font-black">
                   {profile.level}
                 </div>
               </div>
-              <div className="flex-1 relative z-10">
-                <div className={`text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${userRank.bg} ${userRank.color} border ${userRank.border} w-fit mb-2`}>{userRank.title}</div>
-                <h2 className="text-2xl font-black tracking-tight">{profile.username}</h2>
-                <div className="flex items-center gap-4 mt-1">
-                  <div className="text-lg font-black text-white/90">{profile.role === 'admin' ? '∞' : profile.coins.toLocaleString()} <span className="text-xs text-yellow-500">🪙</span></div>
-                  <div className="h-1 w-24 bg-white/5 rounded-full overflow-hidden">
+              <div className="flex-1 relative z-10 text-left">
+                <div className={`text-[7px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${userRank.bg} ${userRank.color} border ${userRank.border} w-fit mb-1`}>{userRank.title}</div>
+                <h2 className="text-xl font-black tracking-tight">{profile.username}</h2>
+                <div className="flex items-center gap-3 mt-0.5">
+                  <div className="text-sm font-black text-white/90">{profile.role === 'admin' ? '∞' : profile.coins.toLocaleString()} <span className="text-[10px] text-yellow-500">🪙</span></div>
+                  <div className="h-0.5 w-20 bg-white/5 rounded-full overflow-hidden">
                     <motion.div 
                       initial={{ width: 0 }}
                       animate={{ width: `${(profile.xp % 1000) / 10}%` }}
@@ -1577,7 +1580,7 @@ const App: React.FC = () => {
           </button>
         </div>
 
-        <div className={`felt-table w-[300px] h-[300px] md:w-[500px] md:h-[500px] rounded-full flex items-center justify-center relative z-10 ${isThunderActive ? 'thunder-active' : ''}`}>
+        <div className={`felt-table mt-[-50px] w-[280px] h-[280px] md:w-[480px] md:h-[480px] rounded-full flex items-center justify-center relative z-10 ${isThunderActive ? 'thunder-active' : ''}`}>
           {/* Trump Indicator - Eye Catching */}
           {gameState.trumpSuit && (
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none select-none z-0">
@@ -1762,7 +1765,10 @@ const App: React.FC = () => {
                 <CardComponent 
                   card={card} 
                   skin={profile.activeSkin} 
-                  onClick={() => playCard(0, card)} 
+                  onClick={() => {
+                    setHoveredSuit(null);
+                    playCard(0, card);
+                  }}
                   disabled={!isSelectable && isMyTurn} 
                   className={`${isMobile ? "scale-[0.75]" : ""} ${isTrump ? 'ring-2 ring-indigo-400 shadow-[0_0_15px_rgba(99,102,241,0.6)]' : ''}`}
                 />
