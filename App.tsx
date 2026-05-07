@@ -33,6 +33,7 @@ import CardComponent from './components/CardComponent';
 
 const INITIAL_COINS = 500;
 const STAKE_AMOUNT = 200;
+const APP_VERSION = '1.2.5';
 
 const getLevelTitle = (level: number) => {
   if (level >= 100) return { title: 'LEGEND', color: 'text-yellow-400', bg: 'bg-yellow-400/10', border: 'border-yellow-400/30' };
@@ -1839,9 +1840,12 @@ const App: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      <div className="h-full w-full">
+      <div className="h-full w-full relative">
         <Toaster position="top-center" richColors />
         {renderView()}
+        <div className="fixed top-3 right-4 px-2 py-1 bg-black/30 backdrop-blur-md rounded-full text-[9px] font-bold text-white/50 select-none pointer-events-none z-[9999] uppercase tracking-widest border border-white/10">
+          v{APP_VERSION}
+        </div>
       </div>
     </ErrorBoundary>
   );
