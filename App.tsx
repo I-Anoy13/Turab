@@ -23,7 +23,8 @@ import {
   addDoc,
   serverTimestamp,
   deleteDoc,
-  arrayUnion
+  arrayUnion,
+  getDocFromServer
 } from 'firebase/firestore';
 import { Peer } from 'peerjs';
 import { toast, Toaster } from 'sonner';
@@ -33,7 +34,54 @@ import CardComponent from './components/CardComponent';
 
 const INITIAL_COINS = 500;
 const STAKE_AMOUNT = 200;
-const APP_VERSION = '1.2.5';
+const APP_VERSION = '1.3.1';
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error Details:', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 const getLevelTitle = (level: number) => {
   if (level >= 100) return { title: 'LEGEND', color: 'text-yellow-400', bg: 'bg-yellow-400/10', border: 'border-yellow-400/30' };
@@ -132,57 +180,6 @@ function createBlob(data: Float32Array): Blob {
   };
 }
 
-// Error Handling Spec for Firestore Operations
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId: string | undefined;
-    email: string | null | undefined;
-    emailVerified: boolean | undefined;
-    isAnonymous: boolean | undefined;
-    tenantId: string | null | undefined;
-    providerInfo: {
-      providerId: string;
-      displayName: string | null;
-      email: string | null;
-      photoUrl: string | null;
-    }[];
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
-    },
-    operationType,
-    path
-  }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -266,7 +263,7 @@ const App: React.FC = () => {
   const resolvingTrickRef = useRef<string | null>(null);
   const [trumpAlert, setTrumpAlert] = useState<{ suit: Suit; playerName: string; type: 'announced' | 'challenged' } | null>(null);
   const [isThunderActive, setIsThunderActive] = useState(false);
-  const [hoveredSuit, setHoveredSuit] = useState<Suit | null>(null);
+  const [hoveredCardKey, setHoveredCardKey] = useState<string | null>(null);
   
   // Login State
   const [loginEmail, setLoginEmail] = useState('');
@@ -320,9 +317,9 @@ const App: React.FC = () => {
     setIsSearchingFriend(true);
     try {
       const q = query(collection(db, 'users'), where('username', '==', friendSearch));
-      const querySnapshot = await getDocs(q);
+      const querySnapshot = await getDocs(q).catch(err => handleFirestoreError(err, OperationType.GET, 'users'));
       
-      if (querySnapshot.empty) {
+      if (!querySnapshot || querySnapshot.empty) {
         toast.error("User not found.");
       } else {
         const friendDoc = querySnapshot.docs[0];
@@ -344,8 +341,8 @@ const App: React.FC = () => {
           where('toUid', '==', friendDoc.id),
           where('status', '==', 'pending')
         );
-        const reqSnapshot = await getDocs(reqQ);
-        if (!reqSnapshot.empty) {
+        const reqSnapshot = await getDocs(reqQ).catch(err => handleFirestoreError(err, OperationType.GET, 'friend_requests'));
+        if (reqSnapshot && !reqSnapshot.empty) {
           toast.error("Request already sent.");
           return;
         }
@@ -356,7 +353,7 @@ const App: React.FC = () => {
           toUid: friendDoc.id,
           status: 'pending',
           timestamp: serverTimestamp()
-        });
+        }).catch(err => handleFirestoreError(err, OperationType.CREATE, 'friend_requests'));
 
         toast.success(`Friend request sent to ${friendSearch}!`);
         setFriendSearch('');
@@ -374,7 +371,10 @@ const App: React.FC = () => {
       const myRef = doc(db, 'users', auth.currentUser!.uid);
       const friendRef = doc(db, 'users', request.fromUid);
 
-      const friendDoc = await getDoc(friendRef);
+      const friendDoc = await getDoc(friendRef).catch(err => {
+        handleFirestoreError(err, OperationType.GET, `users/${request.fromUid}`);
+        throw err;
+      });
       const friendData = friendDoc.data();
 
       const newFriendForMe: Friend = {
@@ -393,13 +393,13 @@ const App: React.FC = () => {
 
       await updateDoc(myRef, {
         friends: arrayUnion(newFriendForMe)
-      });
+      }).catch(err => handleFirestoreError(err, OperationType.UPDATE, `users/${auth.currentUser?.uid}`));
 
       await updateDoc(friendRef, {
         friends: arrayUnion(newFriendForThem)
-      });
+      }).catch(err => handleFirestoreError(err, OperationType.UPDATE, `users/${request.fromUid}`));
 
-      await deleteDoc(doc(db, 'friend_requests', request.id));
+      await deleteDoc(doc(db, 'friend_requests', request.id)).catch(err => handleFirestoreError(err, OperationType.DELETE, `friend_requests/${request.id}`));
       
       // Update local state
       setProfile(prev => ({ ...prev, friends: [...prev.friends, newFriendForMe] }));
@@ -411,7 +411,7 @@ const App: React.FC = () => {
 
   const rejectRequest = async (requestId: string) => {
     try {
-      await deleteDoc(doc(db, 'friend_requests', requestId));
+      await deleteDoc(doc(db, 'friend_requests', requestId)).catch(err => handleFirestoreError(err, OperationType.DELETE, `friend_requests/${requestId}`));
       toast.info("Request rejected.");
     } catch (err) {
       toast.error("Failed to reject request.");
@@ -478,9 +478,9 @@ const App: React.FC = () => {
     const path = `users/${newProfile.turab_id}`;
     try {
       const userRef = doc(db, 'users', newProfile.turab_id);
-      await setDoc(userRef, newProfile, { merge: true });
+      await setDoc(userRef, newProfile, { merge: true }).catch(err => handleFirestoreError(err, OperationType.WRITE, path));
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, path);
+      console.error("Profile sync failed:", err);
     }
   }, []);
 
@@ -489,14 +489,15 @@ const App: React.FC = () => {
       // Small delay to allow SDK to initialize
       await new Promise(resolve => setTimeout(resolve, 5000));
       try {
-        // Use getDoc instead of getDocFromServer to avoid forcing a network trip if already failing
-        await getDoc(doc(db, 'test', 'connection'));
+        // Attempting to fetch a document directly from the server to bypass cache
+        await getDocFromServer(doc(db, '_connection_test_', 'ping')).catch(err => {
+          if (!err.message.includes('not-found')) {
+            handleFirestoreError(err, OperationType.GET, '_connection_test_');
+          }
+        });
         console.log("Firebase connection test: Success");
       } catch (error) {
-        const errMsg = error instanceof Error ? error.message : String(error);
-        if (errMsg.toLowerCase().includes('offline') || errMsg.toLowerCase().includes('unavailable')) {
-          console.warn("Firebase connection test: Backend unreachable. Forcing long polling should help.");
-        }
+        console.warn("Firebase connection test failure:", error);
       }
     };
     testConnection();
@@ -510,9 +511,12 @@ const App: React.FC = () => {
         const fetchProfile = async () => {
           try {
             const userRef = doc(db, 'users', user.uid);
-            const userSnap = await getDoc(userRef);
+            const userSnap = await getDoc(userRef).catch(err => {
+              handleFirestoreError(err, OperationType.GET, path);
+              throw err;
+            });
             
-            if (userSnap.exists()) {
+            if (userSnap && userSnap.exists()) {
               const cloudProfile = userSnap.data() as UserProfile;
               if (user.email === 'anoypak3@gmail.com' && cloudProfile.role !== 'admin') {
                 cloudProfile.role = 'admin';
@@ -767,7 +771,7 @@ const App: React.FC = () => {
       if (reqs.length > 0) {
         toast.info(`You have ${reqs.length} new friend request(s)!`);
       }
-    });
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'friend_requests'));
     return () => unsubscribe();
   }, []);
 
@@ -779,7 +783,7 @@ const App: React.FC = () => {
         const data = doc.data() as GameState;
         setGameState(prev => ({ ...prev, ...data }));
       }
-    });
+    }, (err) => handleFirestoreError(err, OperationType.GET, `matches/${gameState.id}`));
     return () => unsubscribe();
   }, [gameState?.id, view]);
 
@@ -804,7 +808,7 @@ const App: React.FC = () => {
       playerUids: [auth.currentUser!.uid]
     };
 
-    await setDoc(doc(db, 'matches', matchId), newGameState);
+    await setDoc(doc(db, 'matches', matchId), newGameState).catch(err => handleFirestoreError(err, OperationType.CREATE, `matches/${matchId}`));
     setGameState(newGameState);
     
     // Start Voice Chat if human players are present
@@ -842,7 +846,10 @@ const App: React.FC = () => {
     setIsProcessing(true);
     try {
       const matchRef = doc(db, 'matches', gameState.id);
-      const matchDoc = await getDoc(matchRef);
+      const matchDoc = await getDoc(matchRef).catch(err => {
+        handleFirestoreError(err, OperationType.GET, `matches/${gameState.id}`);
+        throw err;
+      });
       if (!matchDoc.exists()) return;
       
       const currentData = matchDoc.data() as GameState;
@@ -854,23 +861,16 @@ const App: React.FC = () => {
       const isCutting = currentData.leadSuit && card.suit !== currentData.leadSuit;
       
       if (isCutting) {
-        const cutsInTrick = currentData.currentTrick.filter(t => t.card.suit !== currentData.leadSuit);
         const isAnnouncement = currentData.trumpSuit === null;
         
-        // A challenge is ONLY possible in the exact same trick where trump was first announced
-        // and only if THIS is the second player to cut in that trick.
-        const isChallenge = currentData.trumpSuit !== null && 
-                          currentData.trumpRevealedInTrick === currentTrickIndex && 
-                          cutsInTrick.length === 1;
-
-        if (isAnnouncement || (isChallenge && card.value > cutsInTrick[0].card.value)) {
+        if (isAnnouncement) {
           newTrump = card.suit;
           newTrumpRevealed = currentTrickIndex;
           
           setTrumpAlert({ 
             suit: card.suit, 
             playerName: currentData.players[playerId].name,
-            type: isAnnouncement ? 'announced' : 'challenged'
+            type: 'announced'
           });
           setIsThunderActive(true);
           setTimeout(() => {
@@ -892,7 +892,7 @@ const App: React.FC = () => {
         trumpSuit: newTrump,
         trumpRevealedInTrick: newTrumpRevealed,
         currentTurn: nextTurn
-      });
+      }).catch(err => handleFirestoreError(err, OperationType.UPDATE, `matches/${gameState.id}`));
     } catch (err) {
       toast.error("Failed to play card.");
     } finally {
@@ -930,7 +930,10 @@ const App: React.FC = () => {
       setIsProcessing(true);
       try {
         const matchRef = doc(db, 'matches', gameState.id);
-        const matchDoc = await getDoc(matchRef);
+        const matchDoc = await getDoc(matchRef).catch(err => {
+          handleFirestoreError(err, OperationType.GET, `matches/${gameState.id}`);
+          throw err;
+        });
         if (!matchDoc.exists()) return;
         
         const latestState = matchDoc.data() as GameState;
@@ -998,7 +1001,7 @@ const App: React.FC = () => {
           leadSuit: null,
           currentTurn: winId,
           roundStatus: ended ? 'ended' : 'playing'
-        });
+        }).catch(err => handleFirestoreError(err, OperationType.UPDATE, `matches/${gameState.id}`));
 
         if (ended && winId === 0) {
           const xpGain = 150;
@@ -1581,7 +1584,7 @@ const App: React.FC = () => {
           </button>
         </div>
 
-        <div className={`felt-table mt-[-80px] w-[320px] h-[320px] md:w-[550px] md:h-[550px] rounded-full flex items-center justify-center relative z-10 ${isThunderActive ? 'thunder-active' : ''}`}>
+        <div className={`felt-table mt-[-100px] w-[350px] h-[350px] md:w-[650px] md:h-[650px] rounded-full flex items-center justify-center relative z-10 ${isThunderActive ? 'thunder-active' : ''}`}>
           {/* Trump Indicator - Eye Catching */}
           {gameState.trumpSuit && (
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none select-none z-0">
@@ -1725,13 +1728,14 @@ const App: React.FC = () => {
             const elem = document.elementFromPoint(touch.clientX, touch.clientY);
             const cardElem = elem?.closest('.wing-card');
             if (cardElem) {
-              const suit = cardElem.getAttribute('data-suit') as Suit;
-              if (suit) setHoveredSuit(suit);
+              const key = cardElem.getAttribute('data-card-key');
+              if (key) setHoveredCardKey(key);
             }
           }}
-          onTouchEnd={() => setHoveredSuit(null)}
+          onTouchEnd={() => setHoveredCardKey(null)}
         >
           {playerHandSorted.map((card, idx) => {
+            const cardKey = `${card.suit}-${card.rank}-${idx}`;
             const isMyTurn = gameState.currentTurn === 0 && !isProcessing && gameState.currentTrick.length < 4;
             const isSelectable = isMyTurn && (!gameState.leadSuit || card.suit === gameState.leadSuit || !gameState.players[0].hand.some(c => c.suit === gameState.leadSuit));
             
@@ -1755,28 +1759,38 @@ const App: React.FC = () => {
             const isTrump = gameState.trumpSuit === card.suit;
             
             // Pop-up logic: 
-            // 1. Hovered suit (user interaction)
+            // 1. Specific card hovered (individual tracking)
             // 2. Lead suit (gameplay focus)
-            const isSuitHovered = hoveredSuit && card.suit === hoveredSuit;
+            const isCardHovered = hoveredCardKey === cardKey;
+            // Also pop the whole suit if a card of that suit is hovered (optional, user wanted individual switch)
+            // but usually you want to see the whole suit. Let's make the specific card pop MORE.
+            const hoveredCardObj = hoveredCardKey ? playerHandSorted.find((_, i) => `${playerHandSorted[i].suit}-${playerHandSorted[i].rank}-${i}` === hoveredCardKey) : null;
+            const isSuitHovered = hoveredCardObj && card.suit === hoveredCardObj.suit;
+            
             const isLeadSuitPop = isMyTurn && gameState.leadSuit && card.suit === gameState.leadSuit;
             
-            const popupOffset = (isSuitHovered || isLeadSuitPop) ? (isMobile ? -35 : -55) : 0;
+            let popupOffset = 0;
+            if (isCardHovered) {
+              popupOffset = isMobile ? -50 : -75; // Extra pop for the specific card
+            } else if (isSuitHovered || isLeadSuitPop) {
+              popupOffset = isMobile ? -30 : -45; // Normal pop for the suit/lead group
+            }
 
             const handleCardPlay = () => {
-              setHoveredSuit(null);
+              setHoveredCardKey(null);
               playCard(0, card);
             };
 
             return (
               <div 
-                key={`${card.suit}-${card.rank}-${idx}`} 
+                key={cardKey} 
                 className="wing-card"
-                data-suit={card.suit}
-                onMouseEnter={() => setHoveredSuit(card.suit)}
-                onMouseLeave={() => setHoveredSuit(null)}
+                data-card-key={cardKey}
+                onMouseEnter={() => setHoveredCardKey(cardKey)}
+                onMouseLeave={() => setHoveredCardKey(null)}
                 style={{
                   transform: `translate(${x}px, ${y + popupOffset}px) rotate(${angle}deg)`,
-                  zIndex: (isSuitHovered || isLeadSuitPop) ? 2000 : idx
+                  zIndex: isCardHovered ? 3000 : ((isSuitHovered || isLeadSuitPop) ? 2000 : idx)
                 }}
               >
                 <CardComponent 

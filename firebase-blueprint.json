@@ -83,6 +83,10 @@
     "/matches/{matchId}": {
       "schema": "Match",
       "description": "Active and past game matches"
+    },
+    "/_connection_test_/{docId}": {
+      "schema": { "type": "object", "properties": {} },
+      "description": "Used for monitoring database connectivity"
     }
   }
 }

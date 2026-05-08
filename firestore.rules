@@ -101,5 +101,9 @@ service cloud.firestore {
       );
       allow delete: if isAdmin();
     }
+
+    match /_connection_test_/{docId} {
+      allow get: if true;
+    }
   }
 }
