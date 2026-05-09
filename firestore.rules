@@ -68,9 +68,10 @@ service cloud.firestore {
     }
 
     function isValidMatch(data) {
-      return data.keys().hasAll(['id', 'players', 'roundStatus', 'playerUids']) &&
+      return data.keys().hasAll(['id', 'players', 'roundStatus', 'playerUids', 'mode']) &&
              data.playerUids is list &&
-             data.roundStatus in ['playing', 'ended'];
+             data.roundStatus in ['lobby', 'playing', 'ended'] &&
+             data.mode in ['classic', 'private'];
     }
 
     // ===============================================================
@@ -96,8 +97,9 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isValidMatch(request.resource.data);
       allow update: if isAuthenticated() && (
-        (request.auth.uid in resource.data.playerUids && isValidMatch(request.resource.data)) ||
-        isAdmin()
+        isAdmin() ||
+        (resource.data.roundStatus == 'lobby' && resource.data.playerUids.size() < 4 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['playerUids'])) ||
+        (request.auth.uid in resource.data.playerUids && isValidMatch(request.resource.data))
       );
       allow delete: if isAdmin();
     }

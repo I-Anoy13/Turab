@@ -61,14 +61,15 @@
         "trumpSuit": { "type": "string" },
         "currentTurn": { "type": "number" },
         "leadSuit": { "type": "string" },
-        "roundStatus": { "type": "string", "enum": ["playing", "ended"] },
+        "roundStatus": { "type": "string", "enum": ["lobby", "playing", "ended"] },
         "history": { "type": "array" },
         "lastWinner": { "type": "number" },
         "stake": { "type": "number" },
         "tableCode": { "type": "string" },
-        "playerUids": { "type": "array", "items": { "type": "string" } }
+        "playerUids": { "type": "array", "items": { "type": "string" } },
+        "mode": { "type": "string", "enum": ["classic", "private"] }
       },
-      "required": ["id", "players", "roundStatus", "playerUids"]
+      "required": ["id", "players", "roundStatus", "playerUids", "mode"]
     }
   },
   "firestore": {

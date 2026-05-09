@@ -66,12 +66,13 @@ export interface GameState {
   trumpRevealedInTrick: number | null; // Index of the trick (wonPile.length / 4)
   currentTurn: number;
   leadSuit: Suit | null;
-  roundStatus: 'playing' | 'ended';
+  roundStatus: 'lobby' | 'playing' | 'ended';
   history: string[];
   lastWinner: number | null;
   stake: number;
   tableCode?: string;
   playerUids: string[]; // To track real human players
+  mode: 'classic' | 'private';
 }
 
 export const RANK_VALUES: Record<Rank, number> = {

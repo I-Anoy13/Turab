@@ -286,6 +286,9 @@ const App: React.FC = () => {
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const nextStartTimeRef = useRef(0);
 
+  const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
+  const [joinCode, setJoinCode] = useState('');
+  
   // Sync Firebase Profile
   const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
   const [isRequestsOpen, setIsRequestsOpen] = useState(false);
@@ -316,48 +319,59 @@ const App: React.FC = () => {
     if (!friendSearch) return;
     setIsSearchingFriend(true);
     try {
-      const q = query(collection(db, 'users'), where('username', '==', friendSearch));
-      const querySnapshot = await getDocs(q).catch(err => handleFirestoreError(err, OperationType.GET, 'users'));
+      // First try searching by Turab ID (User UID)
+      let friendDoc: any = await getDoc(doc(db, 'users', friendSearch)).catch(() => null);
       
-      if (!querySnapshot || querySnapshot.empty) {
-        toast.error("User not found.");
+      // If not found by ID, try by exact username
+      if (!friendDoc || !friendDoc.exists()) {
+        const q = query(collection(db, 'users'), where('username', '==', friendSearch));
+        const querySnapshot = await getDocs(q).catch(err => handleFirestoreError(err, OperationType.GET, 'users'));
+        if (querySnapshot && !querySnapshot.empty) {
+          friendDoc = querySnapshot.docs[0];
+        } else {
+          toast.error("User not found.");
+          return;
+        }
       } else {
-        const friendDoc = querySnapshot.docs[0];
-        
-        if (friendDoc.id === auth.currentUser?.uid) {
-          toast.error("You cannot add yourself.");
-          return;
-        }
-
-        if (profile.friends.some(f => f.id === friendDoc.id)) {
-          toast.error("Already in friends list.");
-          return;
-        }
-
-        // Check if request already sent
-        const reqQ = query(
-          collection(db, 'friend_requests'), 
-          where('fromUid', '==', auth.currentUser?.uid),
-          where('toUid', '==', friendDoc.id),
-          where('status', '==', 'pending')
-        );
-        const reqSnapshot = await getDocs(reqQ).catch(err => handleFirestoreError(err, OperationType.GET, 'friend_requests'));
-        if (reqSnapshot && !reqSnapshot.empty) {
-          toast.error("Request already sent.");
-          return;
-        }
-
-        await addDoc(collection(db, 'friend_requests'), {
-          fromUid: auth.currentUser?.uid,
-          fromUsername: profile.username,
-          toUid: friendDoc.id,
-          status: 'pending',
-          timestamp: serverTimestamp()
-        }).catch(err => handleFirestoreError(err, OperationType.CREATE, 'friend_requests'));
-
-        toast.success(`Friend request sent to ${friendSearch}!`);
-        setFriendSearch('');
+        // Found by ID, we have friendDoc
       }
+      
+      const friendId = friendDoc.id;
+      const friendData = friendDoc.data();
+      
+      if (friendId === auth.currentUser?.uid) {
+        toast.error("You cannot add yourself.");
+        return;
+      }
+
+      if (profile.friends.some(f => f.id === friendId)) {
+        toast.error("Already in friends list.");
+        return;
+      }
+
+      // Check if request already sent
+      const reqQ = query(
+        collection(db, 'friend_requests'), 
+        where('fromUid', '==', auth.currentUser?.uid),
+        where('toUid', '==', friendId),
+        where('status', '==', 'pending')
+      );
+      const reqSnapshot = await getDocs(reqQ).catch(err => handleFirestoreError(err, OperationType.GET, 'friend_requests'));
+      if (reqSnapshot && !reqSnapshot.empty) {
+        toast.error("Request already sent.");
+        return;
+      }
+
+      await addDoc(collection(db, 'friend_requests'), {
+        fromUid: auth.currentUser?.uid,
+        fromUsername: profile.username,
+        toUid: friendId,
+        status: 'pending',
+        timestamp: serverTimestamp()
+      }).catch(err => handleFirestoreError(err, OperationType.CREATE, 'friend_requests'));
+
+      toast.success(`Friend request sent to ${friendData?.username || friendSearch}!`);
+      setFriendSearch('');
     } catch (err) {
       toast.error("Failed to send request.");
     } finally {
@@ -777,35 +791,47 @@ const App: React.FC = () => {
 
   // Sync Game State with Firestore
   useEffect(() => {
-    if (!gameState?.id || view !== 'game') return;
-    const unsubscribe = onSnapshot(doc(db, 'matches', gameState.id), (doc) => {
-      if (doc.exists()) {
-        const data = doc.data() as GameState;
-        setGameState(prev => ({ ...prev, ...data }));
+    if (!gameState?.id || (view !== 'game' && view !== 'lobby')) return;
+    const unsubscribe = onSnapshot(doc(db, 'matches', gameState.id), (docSnapshot) => {
+      if (docSnapshot.exists()) {
+        const data = docSnapshot.data() as GameState;
+        setGameState(prev => {
+          if (!prev) return data;
+          // Only update if data is different to avoid infinite loops
+          if (JSON.stringify(data) === JSON.stringify(prev)) return prev;
+          
+          // If we transitioned to playing, sync names
+          if (data.roundStatus === 'playing' && prev.roundStatus === 'lobby') {
+            setView('game');
+          }
+          return { ...prev, ...data };
+        });
       }
-    }, (err) => handleFirestoreError(err, OperationType.GET, `matches/${gameState.id}`));
+    }, (err) => handleFirestoreError(err, OperationType.GET, `matches/${gameState?.id}`));
     return () => unsubscribe();
   }, [gameState?.id, view]);
 
-  const setupMatch = useCallback(async (code?: string) => {
-    const deck = createDeck();
+  const setupMatch = useCallback(async (code?: string, mode: 'classic' | 'private' = 'classic') => {
+    const matchId = code || (mode === 'private' ? 'LBY-' : 'MATCH-') + Math.random().toString(36).substring(7).toUpperCase();
+    
+    // We don't deal cards until the match starts from the lobby
     const players: Player[] = [
-      { id: 0, name: profile.username, hand: deck.slice(0, 13), score: 0, isAI: false, consecutiveWins: 0, lastWinWasAce: false },
-      { id: 1, name: 'WEST_AI', hand: deck.slice(13, 26), score: 0, isAI: true, consecutiveWins: 0, lastWinWasAce: false },
-      { id: 2, name: 'NORTH_AI', hand: deck.slice(26, 39), score: 0, isAI: true, consecutiveWins: 0, lastWinWasAce: false },
-      { id: 3, name: 'EAST_AI', hand: deck.slice(39, 52), score: 0, isAI: true, consecutiveWins: 0, lastWinWasAce: false },
+      { id: 0, name: profile.username, hand: [], score: 0, isAI: false, consecutiveWins: 0, lastWinWasAce: false },
+      { id: 1, name: 'WEST_AI', hand: [], score: 0, isAI: true, consecutiveWins: 0, lastWinWasAce: false },
+      { id: 2, name: 'NORTH_AI', hand: [], score: 0, isAI: true, consecutiveWins: 0, lastWinWasAce: false },
+      { id: 3, name: 'EAST_AI', hand: [], score: 0, isAI: true, consecutiveWins: 0, lastWinWasAce: false },
     ];
     
-    const matchId = code || 'MATCH-' + Math.random().toString(36).substring(7).toUpperCase();
     const newGameState: GameState = {
       id: matchId,
       players, pile: [], wonPile: [], currentTrick: [],
       trumpSuit: null, trumpRevealedInTrick: null, 
-      currentTurn: 0, leadSuit: null, roundStatus: 'playing',
-      history: ["Match initialized."],
+      currentTurn: 0, leadSuit: null, roundStatus: 'lobby',
+      history: ["Awaiting players in lobby..."],
       lastWinner: null, stake: STAKE_AMOUNT * 4,
-      tableCode: code,
-      playerUids: [auth.currentUser!.uid]
+      tableCode: mode === 'private' ? matchId : undefined,
+      playerUids: [auth.currentUser!.uid],
+      mode
     };
 
     await setDoc(doc(db, 'matches', matchId), newGameState).catch(err => handleFirestoreError(err, OperationType.CREATE, `matches/${matchId}`));
@@ -814,6 +840,51 @@ const App: React.FC = () => {
     // Start Voice Chat if human players are present
     initPeerVoice();
   }, [profile.username, initPeerVoice]);
+
+  const joinPrivateTable = async (code: string) => {
+    if (!code) return toast.error("Enter table code.");
+    setIsProcessing(true);
+    try {
+      const matchRef = doc(db, 'matches', code);
+      const matchSnap = await getDoc(matchRef);
+      
+      if (!matchSnap.exists()) {
+        toast.error("Table not found.");
+        return;
+      }
+      
+      const data = matchSnap.data() as GameState;
+      if (data.roundStatus !== 'lobby') {
+        toast.error("Match already started.");
+        return;
+      }
+      
+      if (data.playerUids.length >= 4) {
+        toast.error("Table is full.");
+        return;
+      }
+      
+      if (data.playerUids.includes(auth.currentUser!.uid)) {
+        setGameState(data);
+        setView('lobby');
+        return;
+      }
+
+      await updateDoc(matchRef, {
+        playerUids: arrayUnion(auth.currentUser?.uid)
+      });
+      
+      setGameState({ ...data, playerUids: [...data.playerUids, auth.currentUser!.uid] });
+      setView('lobby');
+      toast.success("Joined table!");
+    } catch (err) {
+      toast.error("Failed to join table.");
+    } finally {
+      setIsProcessing(false);
+      setIsJoinModalOpen(false);
+      setJoinCode('');
+    }
+  };
 
   const startNewGame = useCallback(async (mode: GameMode, code?: string) => {
     const isAdmin = profile.role === 'admin';
@@ -829,15 +900,99 @@ const App: React.FC = () => {
     
     if (mode === 'classic') {
       setView('searching');
-      setTimeout(async () => {
-        await setupMatch(code);
-        setView('game');
-      }, 1500);
+      try {
+        // Matchmaking logic
+        const q = query(
+          collection(db, 'matches'), 
+          where('roundStatus', '==', 'lobby'), 
+          where('mode', '==', 'classic')
+        );
+        const snap = await getDocs(q);
+        
+        let matchToJoin = null;
+        for (const d of snap.docs) {
+          const data = d.data() as GameState;
+          if (data.playerUids.length < 4) {
+            matchToJoin = { id: d.id, ...data };
+            break;
+          }
+        }
+
+        if (matchToJoin) {
+          const matchRef = doc(db, 'matches', matchToJoin.id);
+          await updateDoc(matchRef, {
+            playerUids: arrayUnion(auth.currentUser?.uid)
+          });
+          setGameState(matchToJoin as any);
+          setView('lobby');
+          toast.success("Match found!");
+        } else {
+          await setupMatch(undefined, 'classic');
+          setView('lobby');
+        }
+      } catch (err) {
+        console.error("Matchmaking error:", err);
+        // Fallback to local game if matching fails
+        setTimeout(async () => {
+          await setupMatch(code, 'classic');
+          setView('lobby');
+        }, 1500);
+      }
     } else {
-      await setupMatch(code || 'LBY-' + Math.random().toString(36).substring(7).toUpperCase());
+      await setupMatch(undefined, 'private');
       setView('lobby');
     }
   }, [profile, setupMatch, syncProfileToCloud]);
+
+  const startMatchFromLobby = async () => {
+    if (!gameState) return;
+    setIsProcessing(true);
+    try {
+      const deck = createDeck();
+      const updatedPlayers = [...gameState.players];
+      
+      // Fetch names of real players
+      const fetchedNames: Record<string, string> = {};
+      for (const uid of gameState.playerUids) {
+        const uSnap = await getDoc(doc(db, 'users', uid));
+        if (uSnap.exists()) {
+          fetchedNames[uid] = uSnap.data().username;
+        }
+      }
+
+      // Assign real players to slots
+      gameState.playerUids.forEach((uid, index) => {
+        updatedPlayers[index] = {
+          ...updatedPlayers[index],
+          name: fetchedNames[uid] || (uid === auth.currentUser?.uid ? profile.username : 'Elite Player'),
+          hand: deck.slice(index * 13, (index + 1) * 13),
+          isAI: false
+        };
+      });
+
+      // Fill remaining slots with AIs and deal their hands
+      for (let i = gameState.playerUids.length; i < 4; i++) {
+        updatedPlayers[i] = {
+          ...updatedPlayers[i],
+          hand: deck.slice(i * 13, (i + 1) * 13),
+          isAI: true
+        };
+      }
+
+      const matchRef = doc(db, 'matches', gameState.id);
+      await updateDoc(matchRef, {
+        players: updatedPlayers,
+        roundStatus: 'playing',
+        history: arrayUnion("Match started! Good luck players.")
+      });
+
+      setView('game');
+    } catch (err) {
+      toast.error("Failed to start match.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   const playCard = useCallback(async (playerId: number, card: Card) => {
     if (!gameState || isProcessing || gameState.currentTrick.length >= 4 || gameState.currentTurn !== playerId) return;
@@ -1036,6 +1191,29 @@ const App: React.FC = () => {
     }, 2000);
   };
 
+  const [lobbyPlayerNames, setLobbyPlayerNames] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!gameState || view !== 'lobby') return;
+    
+    const fetchNames = async () => {
+      const names = { ...lobbyPlayerNames };
+      let changed = false;
+      for (const uid of gameState.playerUids) {
+        if (!names[uid]) {
+          const uSnap = await getDoc(doc(db, 'users', uid));
+          if (uSnap.exists()) {
+            names[uid] = uSnap.data().username;
+            changed = true;
+          }
+        }
+      }
+      if (changed) setLobbyPlayerNames(names);
+    };
+    
+    fetchNames();
+  }, [gameState?.playerUids, view]);
+
   const renderView = () => {
     if (view === 'searching') {
       return (
@@ -1073,31 +1251,56 @@ const App: React.FC = () => {
             className="glass-panel p-6 md:p-10 rounded-3xl md:rounded-[2.5rem] border-white/10 w-full max-w-md text-center relative overflow-hidden"
           >
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-indigo-500 to-transparent animate-shimmer"></div>
-            <div className="text-[8px] font-black text-indigo-400 uppercase tracking-[0.3em] mb-2">Private Arena</div>
+            <div className="text-[8px] font-black text-indigo-400 uppercase tracking-[0.3em] mb-2">{gameState?.mode === 'private' ? 'Private Arena' : 'Public Arena'}</div>
             <h2 className="text-3xl font-black mb-8">LOBBY</h2>
-            <div className="bg-white/5 p-6 rounded-2xl border border-white/10 mb-8">
-              <div className="text-[8px] font-black text-white/20 uppercase mb-1">Table Code</div>
-              <div className="text-2xl font-mono font-black tracking-widest text-indigo-400">{gameState?.tableCode}</div>
-            </div>
-            <div className="space-y-4">
-              <div className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10">
-                <span className="font-black uppercase text-xs">{profile.username}</span>
-                <span className="text-[8px] font-black text-emerald-400 uppercase">Ready</span>
+            {gameState?.mode === 'private' && (
+              <div className="bg-white/5 p-6 rounded-2xl border border-white/10 mb-8">
+                <div className="text-[8px] font-black text-white/20 uppercase mb-1">Table Code</div>
+                <div className="text-2xl font-mono font-black tracking-widest text-indigo-400 flex items-center justify-center gap-2">
+                  {gameState?.tableCode}
+                  <button 
+                    onClick={() => {
+                      navigator.clipboard.writeText(gameState?.tableCode || '');
+                      toast.success("Code copied!");
+                    }}
+                    className="text-xs opacity-50 hover:opacity-100"
+                  >
+                    📋
+                  </button>
+                </div>
               </div>
-              {[1, 2, 3].map(i => (
+            )}
+            <div className="space-y-4">
+              {gameState?.playerUids.map((uid, i) => (
+                <div key={`lobby-player-${i}`} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10">
+                  <span className="font-black uppercase text-xs">
+                    {lobbyPlayerNames[uid] || (uid === auth.currentUser?.uid ? profile.username : 'Elite Player')}
+                  </span>
+                  <span className="text-[8px] font-black text-emerald-400 uppercase">Connected</span>
+                </div>
+              ))}
+              {Array.from({ length: 4 - (gameState?.playerUids.length || 0) }).map((_, i) => (
                 <div key={`lobby-waiting-${i}`} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10 opacity-50">
-                  <span className="font-black uppercase text-xs text-white/20">Waiting...</span>
+                  <span className="font-black uppercase text-xs text-white/20">Awaiting...</span>
+                  <span className="text-[6px] font-black text-white/10 uppercase">Slot {3+i}</span>
                 </div>
               ))}
             </div>
-            <motion.button 
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              onClick={() => setView('game')} 
-              className="gold-button w-full py-5 rounded-2xl text-lg mt-10"
-            >
-              Start Match
-            </motion.button>
+            
+            {gameState?.playerUids[0] === auth.currentUser?.uid ? (
+              <motion.button 
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={startMatchFromLobby} 
+                className="gold-button w-full py-5 rounded-2xl text-lg mt-10"
+              >
+                Start Match
+              </motion.button>
+            ) : (
+              <div className="mt-10 py-5 text-[10px] font-black text-white/20 uppercase animate-pulse">
+                Waiting for host to start...
+              </div>
+            )}
           </motion.div>
         </motion.div>
       );
@@ -1314,7 +1517,18 @@ const App: React.FC = () => {
                 </div>
               </div>
               <div className="flex-1 relative z-10 text-left">
-                <div className={`text-[7px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${userRank.bg} ${userRank.color} border ${userRank.border} w-fit mb-1`}>{userRank.title}</div>
+                <div className="flex items-center justify-between mb-1">
+                  <div className={`text-[7px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${userRank.bg} ${userRank.color} border ${userRank.border} w-fit`}>{userRank.title}</div>
+                  <div 
+                    onClick={() => {
+                      navigator.clipboard.writeText(profile.turab_id);
+                      toast.success("ID copied!");
+                    }}
+                    className="text-[6px] font-mono text-white/20 hover:text-indigo-400 transition-colors cursor-pointer flex items-center gap-1"
+                  >
+                    ID: {profile.turab_id.slice(0, 8)}... 📋
+                  </div>
+                </div>
                 <h2 className="text-xl font-black tracking-tight">{profile.username}</h2>
                 <div className="flex items-center gap-3 mt-0.5">
                   <div className="text-sm font-black text-white/90">{profile.role === 'admin' ? '∞' : profile.coins.toLocaleString()} <span className="text-[10px] text-yellow-500">🪙</span></div>
@@ -1341,12 +1555,16 @@ const App: React.FC = () => {
               
               <div className="grid grid-cols-2 gap-4">
                 <motion.button whileHover={{ y: -2 }} onClick={() => startNewGame('private')} className="glass-panel py-5 rounded-2xl text-[10px] font-black uppercase border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10 transition-all">
-                  Private Lobby
+                  Create Table
                 </motion.button>
-                <motion.button whileHover={{ y: -2 }} onClick={() => setIsFriendsOpen(true)} className="glass-panel py-5 rounded-2xl text-[10px] font-black uppercase border-white/10 hover:bg-white/5 transition-all">
-                  Friends
+                <motion.button whileHover={{ y: -2 }} onClick={() => setIsJoinModalOpen(true)} className="glass-panel py-5 rounded-2xl text-[10px] font-black uppercase border-white/10 hover:bg-white/5 transition-all">
+                  Join Table
                 </motion.button>
               </div>
+
+              <motion.button whileHover={{ y: -2 }} onClick={() => setIsFriendsOpen(true)} className="glass-panel w-full py-5 rounded-2xl text-[10px] font-black uppercase border-white/10 hover:bg-white/5 transition-all">
+                Friends & Social
+              </motion.button>
 
               <div className="grid grid-cols-2 gap-4">
                 <motion.button whileHover={{ opacity: 1 }} onClick={watchAd} className="py-4 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 text-[10px] font-black uppercase text-indigo-400/60 hover:text-indigo-400 hover:bg-indigo-600/20 transition-all">
@@ -1511,6 +1729,54 @@ const App: React.FC = () => {
                       )}
                     </div>
                   )}
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>
+
+          {/* Join Table Modal */}
+          <AnimatePresence>
+            {isJoinModalOpen && (
+              <>
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setIsJoinModalOpen(false)}
+                  className="fixed inset-0 bg-black/80 backdrop-blur-md z-[300]"
+                />
+                <motion.div 
+                  initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                  animate={{ scale: 1, opacity: 1, y: 0 }}
+                  exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                  className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm glass-panel p-8 rounded-[2.5rem] border-white/10 z-[301] text-center"
+                >
+                  <h2 className="text-2xl font-black uppercase tracking-widest mb-2 text-indigo-400">Join Table</h2>
+                  <p className="text-[10px] font-black text-white/20 uppercase mb-8">Enter the secret table code</p>
+                  
+                  <input 
+                    type="text" 
+                    value={joinCode}
+                    onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                    placeholder="LBY-XXXXXX"
+                    className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-5 text-xl font-mono font-black text-center outline-none focus:border-indigo-500/50 focus:bg-white/10 transition-all tracking-widest placeholder:text-white/10"
+                  />
+                  
+                  <div className="grid grid-cols-2 gap-4 mt-8">
+                    <button 
+                      onClick={() => setIsJoinModalOpen(false)}
+                      className="py-4 rounded-2xl bg-white/5 text-[10px] font-black uppercase text-white/40 hover:bg-white/10"
+                    >
+                      Cancel
+                    </button>
+                    <button 
+                      onClick={() => joinPrivateTable(joinCode)}
+                      disabled={!joinCode || isProcessing}
+                      className="gold-button py-4 rounded-2xl text-[10px]"
+                    >
+                      {isProcessing ? 'Connecting...' : 'Join Now'}
+                    </button>
+                  </div>
                 </motion.div>
               </>
             )}
