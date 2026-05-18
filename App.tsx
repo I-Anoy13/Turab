@@ -25,6 +25,7 @@ import {
   deleteDoc,
   arrayUnion,
   getDocFromServer,
+  runTransaction,
   limit
 } from 'firebase/firestore';
 import { Peer } from 'peerjs';
@@ -261,6 +262,20 @@ const App: React.FC = () => {
   
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [lobbyPlayerNames, setLobbyPlayerNames] = useState<Record<string, string>>({});
+  const processingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const setSafeProcessing = useCallback((val: boolean) => {
+    setIsProcessing(val);
+    if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
+    if (val) {
+      processingTimeoutRef.current = setTimeout(() => {
+        setIsProcessing(false);
+        isProcessingRef.current = false;
+        console.warn("⚠️ Processing timeout reached - forcing unlock.");
+      }, 15000); // 15s safety
+    }
+  }, []);
   const resolvingTrickRef = useRef<string | null>(null);
   const [trumpAlert, setTrumpAlert] = useState<{ suit: Suit; playerName: string; type: 'announced' | 'challenged' } | null>(null);
   const [isThunderActive, setIsThunderActive] = useState(false);
@@ -834,7 +849,7 @@ const App: React.FC = () => {
   const joinPrivateTable = async (code: string) => {
     const cleanCode = code.replace(/[^0-9]/g, '');
     if (!cleanCode) return toast.error("Enter valid numeric code.");
-    setIsProcessing(true);
+    setSafeProcessing(true);
     try {
       const matchRef = doc(db, 'matches', cleanCode);
       const matchSnap = await getDoc(matchRef);
@@ -854,7 +869,7 @@ const App: React.FC = () => {
     } catch (err) {
       toast.error("Failed to join table.");
     } finally {
-      setIsProcessing(false);
+      setSafeProcessing(false);
       setIsJoinModalOpen(false);
       setJoinCode('');
     }
@@ -919,57 +934,57 @@ const App: React.FC = () => {
   const startMatchFromLobby = useCallback(async () => {
     if (!gameState || isProcessingRef.current) return;
     isProcessingRef.current = true;
-    setIsProcessing(true);
+    setSafeProcessing(true);
     
-    console.log("🚀 Starting match from lobby:", gameState.id);
-    const toastId = toast.loading("Preparing Arena...");
+    console.log("🚀 [MATCH_START] Initiating transaction for:", gameState.id);
+    const toastId = toast.loading("Initializing Arena...");
     
     try {
-      const deck = createDeck();
-      const updatedPlayers = [...(gameState.players || [])];
+      const matchRef = doc(db, 'matches', gameState.id);
       
-      const validUids = (gameState.playerUids || []).filter(uid => !!uid);
-      const fetchedNames: Record<string, string> = {};
-      
-      try {
-        const userDocs = await Promise.all(validUids.map(uid => getDoc(doc(db, 'users', uid))));
-        userDocs.forEach((uSnap, idx) => {
-          if (uSnap.exists()) {
-            fetchedNames[validUids[idx]] = uSnap.data().username;
+      await runTransaction(db, async (transaction) => {
+        const sfDoc = await transaction.get(matchRef);
+        if (!sfDoc.exists()) throw "Match doc missing.";
+        
+        const data = sfDoc.data() as GameState;
+        if (data.roundStatus === 'playing') return; // Already started
+
+        const deck = createDeck();
+        const updatedPlayers = [...(data.players || [])];
+        const validUids = (data.playerUids || []).filter(uid => !!uid);
+        
+        // Use placeholder names initially if we can't fetch them all inside transaction
+        // Transactions should be fast, so we don't fetch users here. 
+        // We rely on previous fetch or default names.
+        
+        validUids.forEach((uid, index) => {
+          if (index < 4) {
+            updatedPlayers[index] = { 
+              ...(updatedPlayers[index] || { id: index, score: 0, consecutiveWins: 0, lastWinWasAce: false, isAI: false }),
+              name: lobbyPlayerNames[uid] || (uid === auth.currentUser?.uid ? profile.username : 'Player'), 
+              hand: deck.slice(index * 13, (index + 1) * 13),
+              isAI: false
+            };
           }
         });
-      } catch (e) {
-        console.warn("Failed to fetch player names, using defaults:", e);
-      }
 
-      validUids.forEach((uid, index) => {
-        if (index < 4) {
-          updatedPlayers[index] = { 
-            ...(updatedPlayers[index] || { id: index, score: 0, consecutiveWins: 0, lastWinWasAce: false }),
-            name: fetchedNames[uid] || (uid === auth.currentUser?.uid ? profile.username : 'Player'), 
-            hand: deck.slice(index * 13, (index + 1) * 13), 
-            isAI: false 
+        for (let i = validUids.length; i < 4; i++) {
+          updatedPlayers[i] = { 
+            id: i,
+            name: i === 1 ? 'WEST_AI' : i === 2 ? 'NORTH_AI' : 'EAST_AI',
+            hand: deck.slice(i * 13, (i + 1) * 13), 
+            score: 0,
+            isAI: true,
+            consecutiveWins: 0,
+            lastWinWasAce: false
           };
         }
-      });
 
-      for (let i = validUids.length; i < 4; i++) {
-        updatedPlayers[i] = { 
-          id: i,
-          name: i === 1 ? 'WEST_AI' : i === 2 ? 'NORTH_AI' : 'EAST_AI',
-          hand: deck.slice(i * 13, (i + 1) * 13), 
-          score: 0,
-          isAI: true,
-          consecutiveWins: 0,
-          lastWinWasAce: false
-        };
-      }
-
-      console.log("📡 Publishing match state to Firestore...");
-      await updateDoc(doc(db, 'matches', gameState.id), { 
-        players: updatedPlayers, 
-        roundStatus: 'playing', 
-        updatedAt: serverTimestamp() 
+        transaction.update(matchRef, { 
+          players: updatedPlayers, 
+          roundStatus: 'playing', 
+          updatedAt: serverTimestamp() 
+        });
       });
       
       toast.success("Match Started!", { id: toastId });
@@ -979,9 +994,9 @@ const App: React.FC = () => {
       toast.error("Failed to start arena. Check network.", { id: toastId });
     } finally {
       isProcessingRef.current = false;
-      setIsProcessing(false);
+      setSafeProcessing(false);
     }
-  }, [gameState?.id, gameState?.playerUids, gameState?.players, profile.username]);
+  }, [gameState?.id, lobbyPlayerNames, profile.username, setSafeProcessing]);
 
   useEffect(() => {
     if (!gameState?.id || (view !== 'game' && view !== 'lobby' && view !== 'searching')) return;
@@ -1037,37 +1052,59 @@ const App: React.FC = () => {
   const playCard = useCallback(async (playerId: number, card: Card) => {
     if (!gameState || isProcessing || gameState.currentTrick.length >= 4 || gameState.currentTurn !== playerId) return;
     if (gameState.leadSuit && card.suit !== gameState.leadSuit && gameState.players[playerId].hand.some(c => c.suit === gameState.leadSuit)) return;
-    setIsProcessing(true);
+    
+    setSafeProcessing(true);
+    const matchRef = doc(db, 'matches', gameState.id);
+
     try {
-      const matchRef = doc(db, 'matches', gameState.id);
-      const snap = await getDoc(matchRef);
-      if (!snap.exists()) return;
-      const data = snap.data() as GameState;
-      let newTrump = data.trumpSuit;
-      let newTrumpRev = data.trumpRevealedInTrick;
-      const trickIdx = data.wonPile.length / 4;
-      if (data.leadSuit && card.suit !== data.leadSuit && data.trumpSuit === null) {
-        newTrump = card.suit;
-        newTrumpRev = trickIdx;
-        setTrumpAlert({ suit: card.suit, playerName: data.players[playerId].name, type: 'announced' });
-        setIsThunderActive(true);
-        setTimeout(() => { setIsThunderActive(false); setTrumpAlert(null); }, 2000);
-      }
-      const updatedPlayers = data.players.map(p => p.id === playerId ? { ...p, hand: p.hand.filter(c => c.suit !== card.suit || c.rank !== card.rank) } : p);
-      await updateDoc(matchRef, { 
-        players: updatedPlayers, 
-        currentTrick: arrayUnion({ playerId, card }), 
-        leadSuit: data.leadSuit || card.suit, 
-        trumpSuit: newTrump, 
-        trumpRevealedInTrick: newTrumpRev, 
-        currentTurn: (data.currentTurn + 1) % 4,
-        updatedAt: serverTimestamp()
+      await runTransaction(db, async (transaction) => {
+        const sfDoc = await transaction.get(matchRef);
+        if (!sfDoc.exists()) throw "Match does not exist!";
+        
+        const data = sfDoc.data() as GameState;
+        if (data.currentTurn !== playerId) throw "Wait for your turn.";
+        if (data.currentTrick.length >= 4) throw "Trick already full.";
+
+        let newTrump = data.trumpSuit;
+        let newTrumpRev = data.trumpRevealedInTrick;
+        const trickIdx = data.wonPile.length / 4;
+
+        if (data.leadSuit && card.suit !== data.leadSuit && data.trumpSuit === null) {
+          newTrump = card.suit;
+          newTrumpRev = trickIdx;
+          // Note: setTrumpAlert and setIsThunderActive are local effects, 
+          // we can call them here or after transaction success
+        }
+
+        const updatedPlayers = data.players.map(p => 
+          p.id === playerId 
+            ? { ...p, hand: p.hand.filter(c => c.suit !== card.suit || c.rank !== card.rank) } 
+            : p
+        );
+
+        transaction.update(matchRef, { 
+          players: updatedPlayers, 
+          currentTrick: [...data.currentTrick, { playerId, card }], 
+          leadSuit: data.leadSuit || card.suit, 
+          trumpSuit: newTrump, 
+          trumpRevealedInTrick: newTrumpRev, 
+          currentTurn: (data.currentTurn + 1) % 4,
+          updatedAt: serverTimestamp()
+        });
+
+        // Trigger side effects locally if it was trump reveal
+        if (newTrump !== data.trumpSuit) {
+          setTrumpAlert({ suit: card.suit, playerName: data.players[playerId].name, type: 'announced' });
+          setIsThunderActive(true);
+          setTimeout(() => { setIsThunderActive(false); setTrumpAlert(null); }, 2000);
+        }
       });
       playCardSound();
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error("Play Transaction Failed:", err);
+      toast.error(typeof err === 'string' ? err : "Sync error, try again.");
     } finally {
-      setIsProcessing(false);
+      setSafeProcessing(false);
     }
   }, [gameState, isProcessing, playCardSound]);
 
@@ -1087,40 +1124,67 @@ const App: React.FC = () => {
     if (!gameState || gameState.currentTrick.length !== 4 || isProcessing) return;
     const trickId = gameState.currentTrick.map(t => `${t.playerId}-${t.card.suit}-${t.card.rank}`).join('|');
     if (resolvingTrickRef.current === trickId) return;
+    
+    // Only the host resolves the trick to avoid multi-transaction overhead, 
+    // but we add a safety check.
     if (gameState.playerUids[0] !== auth.currentUser?.uid) return;
+    
     resolvingTrickRef.current = trickId;
     const t = setTimeout(async () => {
-      setIsProcessing(true);
+      setSafeProcessing(true);
       try {
         const matchRef = doc(db, 'matches', gameState.id);
-        const snap = await getDoc(matchRef);
-        if (!snap.exists()) return;
-        const data = snap.data() as GameState;
-        if (data.currentTrick.length !== 4) return;
-        const winnerId = determineTrickWinner(data.currentTrick, data.leadSuit!, data.trumpSuit);
-        const winTeam = (winnerId === 0 || winnerId === 2) ? [0, 2] : [1, 3];
-        let players = [...data.players];
-        let pile = [...data.pile, ...data.currentTrick.map(tr => tr.card)];
-        let wonPile = [...data.wonPile];
-        const isLast = players.every(p => p.hand.length === 0);
-        const bestCard = data.currentTrick.find(tr => tr.playerId === winnerId)!.card;
-        const isAce = bestCard.rank === 'A';
-        const hasCons = players[winnerId].consecutiveWins >= 1;
-        if (isLast || (hasCons && data.trumpSuit && !(hasCons && players[winnerId].lastWinWasAce && isAce))) {
-          players = players.map(p => winTeam.includes(p.id) ? { ...p, score: p.score + pile.length, consecutiveWins: 0, lastWinWasAce: false } : { ...p, consecutiveWins: 0, lastWinWasAce: false });
-          wonPile = [...wonPile, ...pile];
-          pile = [];
-        } else {
-          players = players.map(p => p.id === winnerId ? { ...p, consecutiveWins: p.consecutiveWins + 1, lastWinWasAce: isAce } : { ...p, consecutiveWins: 0, lastWinWasAce: false });
-        }
-        await updateDoc(matchRef, { players, pile, wonPile, currentTrick: [], leadSuit: null, currentTurn: winnerId, roundStatus: wonPile.length === 52 ? 'ended' : 'playing', updatedAt: serverTimestamp() });
-        if (wonPile.length === 52 && winnerId === 0) {
-          const up = { ...profile, xp: profile.xp + 150, wins: profile.wins + 1 };
-          setProfile(up);
-          syncProfileToCloud(up);
-        }
-      } catch (err) { console.error(err); } finally { setIsProcessing(false); }
-    }, 1200);
+        await runTransaction(db, async (transaction) => {
+          const sfDoc = await transaction.get(matchRef);
+          if (!sfDoc.exists()) return;
+          const data = sfDoc.data() as GameState;
+          if (data.currentTrick.length !== 4) return;
+
+          const winnerId = determineTrickWinner(data.currentTrick, data.leadSuit!, data.trumpSuit);
+          const winTeam = (winnerId === 0 || winnerId === 2) ? [0, 2] : [1, 3];
+          let players = [...data.players];
+          let pile = [...data.pile, ...data.currentTrick.map(tr => tr.card)];
+          let wonPile = [...data.wonPile];
+          const isLast = players.every(p => p.hand.length === 0);
+          const bestCard = data.currentTrick.find(tr => tr.playerId === winnerId)!.card;
+          const isAce = bestCard.rank === 'A';
+          const hasCons = players[winnerId].consecutiveWins >= 1;
+          
+          if (isLast || (hasCons && data.trumpSuit && !(hasCons && players[winnerId].lastWinWasAce && isAce))) {
+            players = players.map(p => winTeam.includes(p.id) ? { ...p, score: p.score + pile.length, consecutiveWins: 0, lastWinWasAce: false } : { ...p, consecutiveWins: 0, lastWinWasAce: false });
+            wonPile = [...wonPile, ...pile];
+            pile = [];
+          } else {
+            players = players.map(p => p.id === winnerId ? { ...p, consecutiveWins: p.consecutiveWins + 1, lastWinWasAce: isAce } : { ...p, consecutiveWins: 0, lastWinWasAce: false });
+          }
+
+          transaction.update(matchRef, { 
+            players, 
+            pile, 
+            wonPile, 
+            currentTrick: [], 
+            leadSuit: null, 
+            currentTurn: winnerId, 
+            roundStatus: wonPile.length === 52 ? 'ended' : 'playing', 
+            updatedAt: serverTimestamp() 
+          });
+
+          // Secondary side effect for Host
+          if (wonPile.length === 52 && winnerId === 0) {
+            const up = { ...profile, xp: profile.xp + 150, wins: profile.wins + 1 };
+            // syncProfileToCloud will run after transaction completes
+            setProfile(up);
+            syncProfileToCloud(up);
+          }
+        });
+      } catch (err) { 
+        console.error("Trick Resolve Failed:", err);
+        // Clear ref on failure so it can retry
+        resolvingTrickRef.current = "";
+      } finally { 
+        setSafeProcessing(false); 
+      }
+    }, 1500);
     return () => clearTimeout(t);
   }, [gameState, isProcessing, profile, syncProfileToCloud, determineTrickWinner]);
 
@@ -1135,8 +1199,6 @@ const App: React.FC = () => {
       toast.success("500 COINS RECEIVED!", { id: toastId });
     }, 2000);
   };
-
-  const [lobbyPlayerNames, setLobbyPlayerNames] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!gameState || view !== 'lobby') return;
@@ -1253,15 +1315,18 @@ const App: React.FC = () => {
             )}
 
             <div className="mt-16 flex flex-col gap-4 w-full max-w-[280px]">
-              {isHost && playerCount >= 1 && (
+            {isHost && playerCount >= 1 && (
                 <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
-                  onClick={startMatchFromLobby}
+                  onClick={() => {
+                    console.log("👆 Manual Start Triggered by Host");
+                    startMatchFromLobby();
+                  }}
                   disabled={isProcessing}
                   className="w-full py-4 bg-indigo-600/20 border border-indigo-500/40 rounded-xl text-[10px] font-black uppercase tracking-widest text-indigo-400 hover:bg-indigo-600/30 transition-all disabled:opacity-50"
                 >
-                  {isProcessing ? 'INITIALIZING...' : playerCount === 1 ? 'START WITH AIs' : 'START NOW (AI FILL)'}
+                  {isProcessing ? 'INITIALIZING...' : countdown <= 0 ? 'FORCE START ARENA' : playerCount === 1 ? 'START WITH AIs' : 'START NOW (AI FILL)'}
                 </motion.button>
               )}
 
@@ -1816,7 +1881,7 @@ const App: React.FC = () => {
                     initial={{ scale: 0.9, opacity: 0, y: 20 }}
                     animate={{ scale: 1, opacity: 1, y: 0 }}
                     exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                    className="relative w-full max-w-sm glass-panel p-8 rounded-[2.5rem] border-white/20 shadow-2xl z-[301] text-center"
+                    className="relative w-full max-w-sm glass-panel p-8 rounded-[2.5rem] border-white/20 shadow-2xl z-[301] text-center mx-auto"
                   >
                   <h2 className="text-2xl font-black uppercase tracking-widest mb-2 text-indigo-400">Join Table</h2>
                   <p className="text-[10px] font-black text-white/20 uppercase mb-8">Enter the secret table code</p>
