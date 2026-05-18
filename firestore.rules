@@ -95,11 +95,11 @@ service cloud.firestore {
 
     match /matches/{matchId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && isValidMatch(request.resource.data);
+      allow create: if isAuthenticated(); 
       allow update: if isAuthenticated() && (
         isAdmin() ||
-        (resource.data.roundStatus == 'lobby' && resource.data.playerUids.size() < 4 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['playerUids'])) ||
-        (request.auth.uid in resource.data.playerUids && isValidMatch(request.resource.data))
+        (resource.data.roundStatus == 'lobby' && resource.data.playerUids.size() < 4) ||
+        (request.auth.uid in resource.data.playerUids)
       );
       allow delete: if isAdmin();
     }

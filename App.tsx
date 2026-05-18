@@ -792,8 +792,8 @@ const App: React.FC = () => {
 
   const setupMatch = useCallback(async (code?: string, mode: 'classic' | 'private' = 'classic') => {
     const matchId = code || (mode === 'private' ? 'LBY-' : 'MATCH-') + Math.random().toString(36).substring(7).toUpperCase();
+    console.log(`🛠 Setting up ${mode} match: ${matchId}`);
     
-    // We don't deal cards until the match starts from the lobby
     const players: Player[] = [
       { id: 0, name: profile.username, hand: [], score: 0, isAI: false, consecutiveWins: 0, lastWinWasAce: false },
       { id: 1, name: 'WEST_AI', hand: [], score: 0, isAI: true, consecutiveWins: 0, lastWinWasAce: false },
@@ -806,7 +806,7 @@ const App: React.FC = () => {
       players, pile: [], wonPile: [], currentTrick: [],
       trumpSuit: null, trumpRevealedInTrick: null, 
       currentTurn: 0, leadSuit: null, roundStatus: 'lobby',
-      history: ["Awaiting players in lobby..."],
+      history: ["Awaiting players..."],
       lastWinner: null, stake: STAKE_AMOUNT * 4,
       tableCode: mode === 'private' ? matchId : undefined,
       playerUids: [auth.currentUser!.uid],
@@ -815,10 +815,18 @@ const App: React.FC = () => {
       updatedAt: serverTimestamp()
     };
 
-    await setDoc(doc(db, 'matches', matchId), newGameState).catch(err => handleFirestoreError(err, OperationType.CREATE, `matches/${matchId}`));
+    // Set local state immediately for snappy UI
     setGameState(newGameState);
+    
+    try {
+      await setDoc(doc(db, 'matches', matchId), newGameState);
+      console.log("✅ Match doc created in Firestore");
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, `matches/${matchId}`);
+    }
+    
     initPeerVoice();
-  }, [profile.username, initPeerVoice]);
+  }, [profile.username, initPeerVoice, handleFirestoreError]);
 
   const joinPrivateTable = async (code: string) => {
     if (!code) return toast.error("Enter table code.");
@@ -851,6 +859,8 @@ const App: React.FC = () => {
   const startNewGame = useCallback(async (mode: GameMode, code?: string) => {
     const isAdmin = profile.role === 'admin';
     if (!isAdmin && profile.coins < STAKE_AMOUNT) return toast.error("Insufficient coins.");
+    
+    console.log(`🎮 Initializing ${mode} game...`);
     const updatedProfile = { ...profile, coins: isAdmin ? profile.coins : profile.coins - STAKE_AMOUNT, gamesPlayed: profile.gamesPlayed + 1 };
     setProfile(updatedProfile);
     await syncProfileToCloud(updatedProfile);
@@ -858,24 +868,41 @@ const App: React.FC = () => {
     if (mode === 'classic') {
       setView('searching');
       try {
-        const q = query(collection(db, 'matches'), where('mode', '==', 'classic'), where('roundStatus', '==', 'lobby'), limit(10));
+        const q = query(
+          collection(db, 'matches'), 
+          where('mode', '==', 'classic'), 
+          where('roundStatus', '==', 'lobby'), 
+          limit(5) // Reduced limit for faster response
+        );
+        
         const snap = await getDocs(q);
         let matchToJoin = null;
+        
         for (const d of snap.docs) {
           const data = d.data() as GameState;
-          if (data.playerUids.length < 4) { matchToJoin = { id: d.id, ...data }; break; }
+          if (data.playerUids.length < 4) { 
+            matchToJoin = { id: d.id, ...data }; 
+            break; 
+          }
         }
+        
         if (matchToJoin) {
-          await updateDoc(doc(db, 'matches', matchToJoin.id), { playerUids: arrayUnion(auth.currentUser?.uid), updatedAt: serverTimestamp() });
-          setGameState({ ...matchToJoin, playerUids: [...matchToJoin.playerUids, auth.currentUser!.uid] } as any);
+          console.log("🤝 Joining existing match:", matchToJoin.id);
+          const newState = { ...matchToJoin, playerUids: [...matchToJoin.playerUids, auth.currentUser!.uid] };
+          setGameState(newState as any);
+          await updateDoc(doc(db, 'matches', matchToJoin.id), { 
+            playerUids: arrayUnion(auth.currentUser?.uid), 
+            updatedAt: serverTimestamp() 
+          });
         } else {
+          console.log("✨ Creating fresh match...");
           const matchId = 'MATCH-' + Math.random().toString(36).substring(7).toUpperCase();
           await setupMatch(matchId, 'classic');
         }
       } catch (err) {
         console.error("Matchmaking error:", err);
-        toast.error("Matchmaking failed. Returning home.");
-        setTimeout(() => setView('home'), 2000);
+        toast.error("Network issue. Reverting...");
+        setView('home');
       }
     } else {
       await setupMatch(undefined, 'private');
@@ -883,44 +910,97 @@ const App: React.FC = () => {
     }
   }, [profile, setupMatch, syncProfileToCloud]);
 
+  const isProcessingRef = useRef(false);
+
   const startMatchFromLobby = useCallback(async () => {
-    if (!gameState) return;
+    if (!gameState || isProcessingRef.current) return;
+    isProcessingRef.current = true;
     setIsProcessing(true);
+    
+    console.log("🚀 Starting match from lobby:", gameState.id);
+    const toastId = toast.loading("Preparing Arena...");
+    
     try {
       const deck = createDeck();
-      const updatedPlayers = [...gameState.players];
+      const updatedPlayers = [...(gameState.players || [])];
+      
+      const validUids = (gameState.playerUids || []).filter(uid => !!uid);
       const fetchedNames: Record<string, string> = {};
-      for (const uid of gameState.playerUids) {
-        const uSnap = await getDoc(doc(db, 'users', uid));
-        if (uSnap.exists()) fetchedNames[uid] = uSnap.data().username;
+      
+      try {
+        const userDocs = await Promise.all(validUids.map(uid => getDoc(doc(db, 'users', uid))));
+        userDocs.forEach((uSnap, idx) => {
+          if (uSnap.exists()) {
+            fetchedNames[validUids[idx]] = uSnap.data().username;
+          }
+        });
+      } catch (e) {
+        console.warn("Failed to fetch player names, using defaults:", e);
       }
-      gameState.playerUids.forEach((uid, index) => {
-        updatedPlayers[index] = { ...updatedPlayers[index], name: fetchedNames[uid] || 'Player', hand: deck.slice(index * 13, (index + 1) * 13), isAI: false };
+
+      validUids.forEach((uid, index) => {
+        if (index < 4) {
+          updatedPlayers[index] = { 
+            ...(updatedPlayers[index] || { id: index, score: 0, consecutiveWins: 0, lastWinWasAce: false }),
+            name: fetchedNames[uid] || (uid === auth.currentUser?.uid ? profile.username : 'Player'), 
+            hand: deck.slice(index * 13, (index + 1) * 13), 
+            isAI: false 
+          };
+        }
       });
-      for (let i = gameState.playerUids.length; i < 4; i++) {
-        updatedPlayers[i] = { ...updatedPlayers[i], hand: deck.slice(i * 13, (i + 1) * 13), isAI: true };
+
+      for (let i = validUids.length; i < 4; i++) {
+        updatedPlayers[i] = { 
+          id: i,
+          name: i === 1 ? 'WEST_AI' : i === 2 ? 'NORTH_AI' : 'EAST_AI',
+          hand: deck.slice(i * 13, (i + 1) * 13), 
+          score: 0,
+          isAI: true,
+          consecutiveWins: 0,
+          lastWinWasAce: false
+        };
       }
-      await updateDoc(doc(db, 'matches', gameState.id), { players: updatedPlayers, roundStatus: 'playing', updatedAt: serverTimestamp() });
+
+      console.log("📡 Publishing match state to Firestore...");
+      await updateDoc(doc(db, 'matches', gameState.id), { 
+        players: updatedPlayers, 
+        roundStatus: 'playing', 
+        updatedAt: serverTimestamp() 
+      });
+      
+      toast.success("Match Started!", { id: toastId });
       setView('game');
     } catch (err) {
-      toast.error("Failed to start match.");
+      console.error("❌ Start match error:", err);
+      toast.error("Failed to start arena. Check network.", { id: toastId });
     } finally {
+      isProcessingRef.current = false;
       setIsProcessing(false);
     }
-  }, [gameState]);
+  }, [gameState?.id, gameState?.playerUids, gameState?.players, profile.username]);
 
   useEffect(() => {
     if (!gameState?.id || (view !== 'game' && view !== 'lobby' && view !== 'searching')) return;
-    const unsubscribe = onSnapshot(doc(db, 'matches', gameState.id), (doc) => {
-      if (doc.exists()) {
-        const data = doc.data() as GameState;
+    
+    const unsubscribe = onSnapshot(doc(db, 'matches', gameState.id), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data() as GameState;
         setGameState(prev => {
           if (!prev) return data;
           if (JSON.stringify(data) === JSON.stringify(prev)) return prev;
-          if (data.roundStatus === 'playing' && prev?.roundStatus === 'lobby') setView('game');
-          if (data.mode === 'classic' && data.playerUids.length === 4 && data.roundStatus === 'lobby' && data.playerUids[0] === auth.currentUser?.uid) {
-            startMatchFromLobby();
+          
+          if (data.roundStatus === 'playing' && prev.roundStatus !== 'playing') {
+            setView('game');
           }
+          
+          if (data.mode === 'classic' && 
+              data.playerUids.length === 4 && 
+              data.roundStatus === 'lobby' && 
+              data.playerUids[0] === auth.currentUser?.uid) {
+            // Delay auto-start slightly to ensure all clients are ready
+            setTimeout(() => startMatchFromLobby(), 500);
+          }
+          
           return { ...prev, ...data };
         });
       }
@@ -1092,55 +1172,81 @@ const App: React.FC = () => {
   const renderView = () => {
     if (view === 'searching') {
       const playerCount = gameState?.playerUids.length || 0;
+      const isHost = gameState?.playerUids[0] === auth.currentUser?.uid;
+
       return (
         <motion.div 
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="h-[100dvh] w-full flex flex-col items-center justify-center bg-transparent p-8"
+          className="h-[100dvh] w-full flex flex-col items-center justify-center bg-black p-8 relative overflow-hidden"
         >
-          <div className="relative">
-            <motion.div 
-              animate={{ rotate: 360 }}
-              transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
-              className="w-32 h-32 rounded-full border-t-2 border-indigo-500 mb-8"
-            ></motion.div>
-            <div className="absolute inset-0 flex items-center justify-center text-2xl animate-pulse">
-              {playerCount > 0 ? playerCount : '🃏'}
+          {/* Subtle static card patterns in background */}
+          <div className="absolute inset-0 opacity-[0.03] pointer-events-none select-none overflow-hidden flex flex-wrap gap-12 rotate-12 scale-150">
+            {Array.from({ length: 20 }).map((_, i) => (
+              <div key={i} className="text-8xl">🃏</div>
+            ))}
+          </div>
+
+          <div className="relative z-10 flex flex-col items-center">
+            <div className="relative mb-12">
+              <motion.div 
+                animate={{ rotate: 360 }}
+                transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
+                className="w-32 h-32 rounded-full border-t-2 border-indigo-500 mb-8"
+              ></motion.div>
+              <div className="absolute inset-0 flex items-center justify-center text-3xl font-black text-indigo-500">
+                {playerCount > 0 ? playerCount : '🃏'}
+              </div>
+            </div>
+
+            <h2 className="text-2xl font-black uppercase tracking-[0.3em] mb-2 text-center">
+              {playerCount > 0 ? `ARENA: ${playerCount}/4` : 'MATCHMAKING'}
+            </h2>
+            
+            <p className="text-white/30 text-[10px] uppercase font-bold tracking-[0.2em] text-center max-w-[250px] leading-relaxed">
+              {playerCount === 0 
+                ? 'Negotiating entry to elite servers...' 
+                : 'Awaiting remaining challengers to finalize the table.'}
+            </p>
+            
+            {playerCount >= 2 && gameState?.mode === 'classic' && (
+              <motion.div 
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mt-8 flex items-center gap-2 px-4 py-2 bg-indigo-500/10 border border-indigo-500/20 rounded-full"
+              >
+                <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse" />
+                <span className="text-[9px] font-black uppercase tracking-widest text-indigo-400">Match Stabilization Active</span>
+              </motion.div>
+            )}
+
+            <div className="mt-16 flex flex-col gap-4 w-full max-w-[280px]">
+              {isHost && playerCount >= 1 && (
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={startMatchFromLobby}
+                  disabled={isProcessing}
+                  className="w-full py-4 bg-indigo-600/20 border border-indigo-500/40 rounded-xl text-[10px] font-black uppercase tracking-widest text-indigo-400 hover:bg-indigo-600/30 transition-all disabled:opacity-50"
+                >
+                  {isProcessing ? 'INITIALIZING...' : playerCount === 1 ? 'START WITH AIs' : 'START NOW (AI FILL)'}
+                </motion.button>
+              )}
+
+              <motion.button 
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => {
+                  setGameState(null);
+                  setView('home');
+                }}
+                className="w-full py-4 bg-white/5 border border-white/10 rounded-xl text-[10px] font-black uppercase tracking-widest text-white/30 hover:bg-white/10 hover:text-white transition-all underline underline-offset-4 decoration-white/0 hover:decoration-white/10"
+              >
+                ABANDON SEARCH
+              </motion.button>
             </div>
           </div>
-          <h2 className="text-2xl font-black uppercase tracking-[0.3em] animate-pulse">
-            {playerCount > 0 ? `FOUND ${playerCount}/4` : 'Searching...'}
-          </h2>
-          <p className="text-white/20 text-[10px] mt-4 uppercase font-black tracking-widest">
-            {playerCount === 0 ? 'Connecting to Elite Servers' : 'Waiting for more players'}
-          </p>
-          
-          {playerCount >= 2 && gameState?.mode === 'classic' && (
-            <div className="mt-4 text-[8px] font-black text-indigo-400 uppercase tracking-widest animate-pulse">
-              Matching almost complete. Starting soon...
-            </div>
-          )}
-
-          {playerCount === 1 && gameState?.mode === 'classic' && (
-            <motion.button
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              onClick={startMatchFromLobby}
-              className="mt-6 text-[8px] font-black text-indigo-400 uppercase tracking-widest hover:text-indigo-300 transition-colors"
-            >
-              Start with AIs anyway?
-            </motion.button>
-          )}
-
-          <motion.button 
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={() => setView('home')}
-            className="mt-12 text-[10px] font-black text-white/30 hover:text-white uppercase tracking-widest border border-white/10 px-8 py-3 rounded-full transition-all"
-          >
-            Cancel Search
-          </motion.button>
         </motion.div>
       );
     }
