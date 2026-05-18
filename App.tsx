@@ -35,7 +35,7 @@ import CardComponent from './components/CardComponent';
 
 const INITIAL_COINS = 500;
 const STAKE_AMOUNT = 200;
-const APP_VERSION = '1.3.2';
+const APP_VERSION = '1.3.3';
 
 enum OperationType {
   CREATE = 'create',
@@ -790,28 +790,6 @@ const App: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
-  // Sync Game State with Firestore
-  useEffect(() => {
-    if (!gameState?.id || (view !== 'game' && view !== 'lobby')) return;
-    const unsubscribe = onSnapshot(doc(db, 'matches', gameState.id), (docSnapshot) => {
-      if (docSnapshot.exists()) {
-        const data = docSnapshot.data() as GameState;
-        setGameState(prev => {
-          if (!prev) return data;
-          // Only update if data is different to avoid infinite loops
-          if (JSON.stringify(data) === JSON.stringify(prev)) return prev;
-          
-          // If we transitioned to playing, sync names
-          if (data.roundStatus === 'playing' && prev.roundStatus === 'lobby') {
-            setView('game');
-          }
-          return { ...prev, ...data };
-        });
-      }
-    }, (err) => handleFirestoreError(err, OperationType.GET, `matches/${gameState?.id}`));
-    return () => unsubscribe();
-  }, [gameState?.id, view]);
-
   const setupMatch = useCallback(async (code?: string, mode: 'classic' | 'private' = 'classic') => {
     const matchId = code || (mode === 'private' ? 'LBY-' : 'MATCH-') + Math.random().toString(36).substring(7).toUpperCase();
     
@@ -832,13 +810,13 @@ const App: React.FC = () => {
       lastWinner: null, stake: STAKE_AMOUNT * 4,
       tableCode: mode === 'private' ? matchId : undefined,
       playerUids: [auth.currentUser!.uid],
-      mode
+      mode,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
     };
 
     await setDoc(doc(db, 'matches', matchId), newGameState).catch(err => handleFirestoreError(err, OperationType.CREATE, `matches/${matchId}`));
     setGameState(newGameState);
-    
-    // Start Voice Chat if human players are present
     initPeerVoice();
   }, [profile.username, initPeerVoice]);
 
@@ -848,33 +826,16 @@ const App: React.FC = () => {
     try {
       const matchRef = doc(db, 'matches', code);
       const matchSnap = await getDoc(matchRef);
-      
-      if (!matchSnap.exists()) {
-        toast.error("Table not found.");
-        return;
-      }
-      
+      if (!matchSnap.exists()) return toast.error("Table not found.");
       const data = matchSnap.data() as GameState;
-      if (data.roundStatus !== 'lobby') {
-        toast.error("Match already started.");
-        return;
-      }
-      
-      if (data.playerUids.length >= 4) {
-        toast.error("Table is full.");
-        return;
-      }
-      
+      if (data.roundStatus !== 'lobby') return toast.error("Match already started.");
+      if (data.playerUids.length >= 4) return toast.error("Table is full.");
       if (data.playerUids.includes(auth.currentUser!.uid)) {
         setGameState(data);
         setView('lobby');
         return;
       }
-
-      await updateDoc(matchRef, {
-        playerUids: arrayUnion(auth.currentUser?.uid)
-      });
-      
+      await updateDoc(matchRef, { playerUids: arrayUnion(auth.currentUser?.uid), updatedAt: serverTimestamp() });
       setGameState({ ...data, playerUids: [...data.playerUids, auth.currentUser!.uid] });
       setView('lobby');
       toast.success("Joined table!");
@@ -890,67 +851,31 @@ const App: React.FC = () => {
   const startNewGame = useCallback(async (mode: GameMode, code?: string) => {
     const isAdmin = profile.role === 'admin';
     if (!isAdmin && profile.coins < STAKE_AMOUNT) return toast.error("Insufficient coins.");
-    
-    const updatedProfile = { 
-      ...profile, 
-      coins: isAdmin ? profile.coins : profile.coins - STAKE_AMOUNT, 
-      gamesPlayed: profile.gamesPlayed + 1 
-    };
+    const updatedProfile = { ...profile, coins: isAdmin ? profile.coins : profile.coins - STAKE_AMOUNT, gamesPlayed: profile.gamesPlayed + 1 };
     setProfile(updatedProfile);
     await syncProfileToCloud(updatedProfile);
     
     if (mode === 'classic') {
       setView('searching');
-      const searchTimeout = setTimeout(() => {
-        if (view === 'searching') {
-          console.warn("Matchmaking timeout - falling back to lobby creation");
-          setupMatch(undefined, 'classic').then(() => setView('lobby'));
-        }
-      }, 8000);
-
       try {
-        // Matchmaking logic - simplified query to avoid composite index requirements
-        // We filter roundStatus in memory
-        console.log("Searching for classic matches...");
-        const q = query(
-          collection(db, 'matches'), 
-          where('mode', '==', 'classic'),
-          limit(20)
-        );
+        const q = query(collection(db, 'matches'), where('mode', '==', 'classic'), where('roundStatus', '==', 'lobby'), limit(10));
         const snap = await getDocs(q);
-        
         let matchToJoin = null;
         for (const d of snap.docs) {
           const data = d.data() as GameState;
-          if (data.roundStatus === 'lobby' && data.playerUids.length < 4) {
-            matchToJoin = { id: d.id, ...data };
-            break;
-          }
+          if (data.playerUids.length < 4) { matchToJoin = { id: d.id, ...data }; break; }
         }
-
-        clearTimeout(searchTimeout);
-
         if (matchToJoin) {
-          console.log("Found match:", matchToJoin.id);
-          const matchRef = doc(db, 'matches', matchToJoin.id);
-          await updateDoc(matchRef, {
-            playerUids: arrayUnion(auth.currentUser?.uid)
-          });
+          await updateDoc(doc(db, 'matches', matchToJoin.id), { playerUids: arrayUnion(auth.currentUser?.uid), updatedAt: serverTimestamp() });
           setGameState({ ...matchToJoin, playerUids: [...matchToJoin.playerUids, auth.currentUser!.uid] } as any);
-          setView('lobby');
-          toast.success("Match found!");
         } else {
-          console.log("No existing match found, creating new one...");
-          await setupMatch(undefined, 'classic');
-          setView('lobby');
+          const matchId = 'MATCH-' + Math.random().toString(36).substring(7).toUpperCase();
+          await setupMatch(matchId, 'classic');
         }
       } catch (err) {
-        clearTimeout(searchTimeout);
         console.error("Matchmaking error:", err);
-        // Fallback to local game if matching fails
-        await setupMatch(code, 'classic').catch(e => console.error("Fallback setupMatch failed:", e));
-        setView('lobby');
-        toast.info("Started new lobby due to search issues.");
+        toast.error("Matchmaking failed. Returning home.");
+        setTimeout(() => setView('home'), 2000);
       }
     } else {
       await setupMatch(undefined, 'private');
@@ -958,240 +883,162 @@ const App: React.FC = () => {
     }
   }, [profile, setupMatch, syncProfileToCloud]);
 
-  const startMatchFromLobby = async () => {
+  const startMatchFromLobby = useCallback(async () => {
     if (!gameState) return;
     setIsProcessing(true);
     try {
       const deck = createDeck();
       const updatedPlayers = [...gameState.players];
-      
-      // Fetch names of real players
       const fetchedNames: Record<string, string> = {};
       for (const uid of gameState.playerUids) {
         const uSnap = await getDoc(doc(db, 'users', uid));
-        if (uSnap.exists()) {
-          fetchedNames[uid] = uSnap.data().username;
-        }
+        if (uSnap.exists()) fetchedNames[uid] = uSnap.data().username;
       }
-
-      // Assign real players to slots
       gameState.playerUids.forEach((uid, index) => {
-        updatedPlayers[index] = {
-          ...updatedPlayers[index],
-          name: fetchedNames[uid] || (uid === auth.currentUser?.uid ? profile.username : 'Elite Player'),
-          hand: deck.slice(index * 13, (index + 1) * 13),
-          isAI: false
-        };
+        updatedPlayers[index] = { ...updatedPlayers[index], name: fetchedNames[uid] || 'Player', hand: deck.slice(index * 13, (index + 1) * 13), isAI: false };
       });
-
-      // Fill remaining slots with AIs and deal their hands
       for (let i = gameState.playerUids.length; i < 4; i++) {
-        updatedPlayers[i] = {
-          ...updatedPlayers[i],
-          hand: deck.slice(i * 13, (i + 1) * 13),
-          isAI: true
-        };
+        updatedPlayers[i] = { ...updatedPlayers[i], hand: deck.slice(i * 13, (i + 1) * 13), isAI: true };
       }
-
-      const matchRef = doc(db, 'matches', gameState.id);
-      await updateDoc(matchRef, {
-        players: updatedPlayers,
-        roundStatus: 'playing',
-        history: arrayUnion("Match started! Good luck players.")
-      });
-
+      await updateDoc(doc(db, 'matches', gameState.id), { players: updatedPlayers, roundStatus: 'playing', updatedAt: serverTimestamp() });
       setView('game');
     } catch (err) {
       toast.error("Failed to start match.");
     } finally {
       setIsProcessing(false);
     }
-  };
+  }, [gameState]);
+
+  useEffect(() => {
+    if (!gameState?.id || (view !== 'game' && view !== 'lobby' && view !== 'searching')) return;
+    const unsubscribe = onSnapshot(doc(db, 'matches', gameState.id), (doc) => {
+      if (doc.exists()) {
+        const data = doc.data() as GameState;
+        setGameState(prev => {
+          if (!prev) return data;
+          if (JSON.stringify(data) === JSON.stringify(prev)) return prev;
+          if (data.roundStatus === 'playing' && prev?.roundStatus === 'lobby') setView('game');
+          if (data.mode === 'classic' && data.playerUids.length === 4 && data.roundStatus === 'lobby' && data.playerUids[0] === auth.currentUser?.uid) {
+            startMatchFromLobby();
+          }
+          return { ...prev, ...data };
+        });
+      }
+    });
+    return () => unsubscribe();
+  }, [gameState?.id, view, startMatchFromLobby]);
+
+  const playCardSound = useCallback(() => {
+    const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/261/261-preview.mp3');
+    audio.volume = 0.2;
+    audio.play().catch(() => {});
+  }, []);
+
+  const determineTrickWinner = useCallback((trick: { playerId: number; card: Card }[], leadSuit: Suit, trumpSuit: Suit | null) => {
+    let winId = trick[0].playerId;
+    let bestCard = trick[0].card;
+    trick.forEach(({ playerId, card }) => {
+      const isTrump = trumpSuit && card.suit === trumpSuit;
+      const isLead = card.suit === leadSuit;
+      const bestIsTrump = trumpSuit && bestCard.suit === trumpSuit;
+      if (isTrump) {
+        if (!bestIsTrump || card.value > bestCard.value) { winId = playerId; bestCard = card; }
+      } else if (isLead) {
+        if (!bestIsTrump && card.value > bestCard.value) { winId = playerId; bestCard = card; }
+      }
+    });
+    return winId;
+  }, []);
 
   const playCard = useCallback(async (playerId: number, card: Card) => {
     if (!gameState || isProcessing || gameState.currentTrick.length >= 4 || gameState.currentTurn !== playerId) return;
     if (gameState.leadSuit && card.suit !== gameState.leadSuit && gameState.players[playerId].hand.some(c => c.suit === gameState.leadSuit)) return;
-
     setIsProcessing(true);
     try {
       const matchRef = doc(db, 'matches', gameState.id);
-      const matchDoc = await getDoc(matchRef).catch(err => {
-        handleFirestoreError(err, OperationType.GET, `matches/${gameState.id}`);
-        throw err;
-      });
-      if (!matchDoc.exists()) return;
-      
-      const currentData = matchDoc.data() as GameState;
-      let newTrump = currentData.trumpSuit;
-      let newTrumpRevealed = currentData.trumpRevealedInTrick;
-      let players = [...currentData.players];
-      
-      const currentTrickIndex = currentData.wonPile.length / 4;
-      const isCutting = currentData.leadSuit && card.suit !== currentData.leadSuit;
-      
-      if (isCutting) {
-        const isAnnouncement = currentData.trumpSuit === null;
-        
-        if (isAnnouncement) {
-          newTrump = card.suit;
-          newTrumpRevealed = currentTrickIndex;
-          
-          setTrumpAlert({ 
-            suit: card.suit, 
-            playerName: currentData.players[playerId].name,
-            type: 'announced'
-          });
-          setIsThunderActive(true);
-          setTimeout(() => {
-            setIsThunderActive(false);
-            setTrumpAlert(null);
-          }, 1500);
-          players = players.map(p => ({ ...p, lastWinWasAce: false }));
-        }
+      const snap = await getDoc(matchRef);
+      if (!snap.exists()) return;
+      const data = snap.data() as GameState;
+      let newTrump = data.trumpSuit;
+      let newTrumpRev = data.trumpRevealedInTrick;
+      const trickIdx = data.wonPile.length / 4;
+      if (data.leadSuit && card.suit !== data.leadSuit && data.trumpSuit === null) {
+        newTrump = card.suit;
+        newTrumpRev = trickIdx;
+        setTrumpAlert({ suit: card.suit, playerName: data.players[playerId].name, type: 'announced' });
+        setIsThunderActive(true);
+        setTimeout(() => { setIsThunderActive(false); setTrumpAlert(null); }, 2000);
       }
-
-      players = players.map(p => p.id === playerId ? { ...p, hand: p.hand.filter(c => c.suit !== card.suit || c.rank !== card.rank) } : p);
-      
-      const nextTurn = (currentData.currentTurn + 1) % 4;
-      
-      await updateDoc(matchRef, {
-        players,
-        currentTrick: arrayUnion({ playerId, card }),
-        leadSuit: currentData.leadSuit || card.suit,
-        trumpSuit: newTrump,
-        trumpRevealedInTrick: newTrumpRevealed,
-        currentTurn: nextTurn
-      }).catch(err => handleFirestoreError(err, OperationType.UPDATE, `matches/${gameState.id}`));
+      const updatedPlayers = data.players.map(p => p.id === playerId ? { ...p, hand: p.hand.filter(c => c.suit !== card.suit || c.rank !== card.rank) } : p);
+      await updateDoc(matchRef, { 
+        players: updatedPlayers, 
+        currentTrick: arrayUnion({ playerId, card }), 
+        leadSuit: data.leadSuit || card.suit, 
+        trumpSuit: newTrump, 
+        trumpRevealedInTrick: newTrumpRev, 
+        currentTurn: (data.currentTurn + 1) % 4,
+        updatedAt: serverTimestamp()
+      });
+      playCardSound();
     } catch (err) {
-      toast.error("Failed to play card.");
+      console.error(err);
     } finally {
       setIsProcessing(false);
     }
-  }, [gameState, isProcessing]);
+  }, [gameState, isProcessing, playCardSound]);
 
   useEffect(() => {
     if (gameState?.roundStatus === 'playing' && gameState.players[gameState.currentTurn].isAI && !isProcessing && gameState.currentTrick.length < 4) {
-      const timer = setTimeout(() => {
+      const t = setTimeout(() => {
         const p = gameState.players[gameState.currentTurn];
         const valid = gameState.leadSuit ? p.hand.filter(c => c.suit === gameState.leadSuit) : p.hand;
-        const card = valid.length > 0 ? valid[Math.floor(Math.random() * valid.length)] : p.hand[0];
+        const card = (valid.length > 0 ? valid : p.hand)[Math.floor(Math.random() * (valid.length || p.hand.length))];
         if (card) playCard(p.id, card);
       }, 1000);
-      return () => clearTimeout(timer);
+      return () => clearTimeout(t);
     }
   }, [gameState?.currentTurn, isProcessing, gameState?.roundStatus, gameState?.leadSuit, playCard]);
 
   useEffect(() => {
     if (!gameState || gameState.currentTrick.length !== 4 || isProcessing) return;
-
-    // Use a unique ID for the current trick to prevent double-processing or timer cancellation
     const trickId = gameState.currentTrick.map(t => `${t.playerId}-${t.card.suit}-${t.card.rank}`).join('|');
     if (resolvingTrickRef.current === trickId) return;
-
-    // Only the master client resolves
-    const isMaster = gameState.playerUids && gameState.playerUids[0] === auth.currentUser?.uid;
-    if (!isMaster) return;
-
+    if (gameState.playerUids[0] !== auth.currentUser?.uid) return;
     resolvingTrickRef.current = trickId;
-    console.log("Arena: Trick detected full. Initiating resolution sequence...");
-
-    const timer = setTimeout(async () => {
+    const t = setTimeout(async () => {
       setIsProcessing(true);
       try {
         const matchRef = doc(db, 'matches', gameState.id);
-        const matchDoc = await getDoc(matchRef).catch(err => {
-          handleFirestoreError(err, OperationType.GET, `matches/${gameState.id}`);
-          throw err;
-        });
-        if (!matchDoc.exists()) return;
-        
-        const latestState = matchDoc.data() as GameState;
-        if (latestState.currentTrick.length !== 4) return;
-
-        const trick = latestState.currentTrick;
-        const leadSuit = trick[0].card.suit;
-        const trumpSuit = latestState.trumpSuit;
-        
-        let winId = trick[0].playerId;
-        let bestCard = trick[0].card;
-
-        trick.forEach(({ playerId, card }) => {
-          const isTrump = trumpSuit && card.suit === trumpSuit;
-          const isLead = card.suit === leadSuit;
-          const bestIsTrump = trumpSuit && bestCard.suit === trumpSuit;
-
-          if (isTrump) {
-            if (!bestIsTrump || card.value > bestCard.value) {
-              winId = playerId;
-              bestCard = card;
-            }
-          } else if (isLead) {
-            if (!bestIsTrump && card.value > bestCard.value) {
-              winId = playerId;
-              bestCard = card;
-            }
-          }
-        });
-
-        const winningTeamIndices = (winId === 0 || winId === 2) ? [0, 2] : [1, 3];
-        let updatedPlayers = [...latestState.players];
-        const isLastTrick = updatedPlayers.every(p => p.hand.length === 0);
-        
-        let newPile = [...latestState.pile, ...trick.map(t => t.card)];
-        let newWonPile = [...latestState.wonPile];
-        
-        // Calculate point bonuses/consecutive flags
-        const isCurrentWinAce = bestCard.rank === 'A';
-        const wasLastWinAce = updatedPlayers[winId].lastWinWasAce;
-        const hasConsecutive = updatedPlayers[winId].consecutiveWins >= 1;
-        const isDoubleAceBlock = hasConsecutive && wasLastWinAce && isCurrentWinAce;
-
-        if (isLastTrick || (hasConsecutive && latestState.trumpSuit && !isDoubleAceBlock)) {
-          updatedPlayers = updatedPlayers.map(p => {
-            if (winningTeamIndices.includes(p.id)) return { ...p, score: p.score + newPile.length, consecutiveWins: 0, lastWinWasAce: false };
-            return { ...p, consecutiveWins: 0, lastWinWasAce: false };
-          });
-          newWonPile = [...newWonPile, ...newPile];
-          newPile = [];
+        const snap = await getDoc(matchRef);
+        if (!snap.exists()) return;
+        const data = snap.data() as GameState;
+        if (data.currentTrick.length !== 4) return;
+        const winnerId = determineTrickWinner(data.currentTrick, data.leadSuit!, data.trumpSuit);
+        const winTeam = (winnerId === 0 || winnerId === 2) ? [0, 2] : [1, 3];
+        let players = [...data.players];
+        let pile = [...data.pile, ...data.currentTrick.map(tr => tr.card)];
+        let wonPile = [...data.wonPile];
+        const isLast = players.every(p => p.hand.length === 0);
+        const bestCard = data.currentTrick.find(tr => tr.playerId === winnerId)!.card;
+        const isAce = bestCard.rank === 'A';
+        const hasCons = players[winnerId].consecutiveWins >= 1;
+        if (isLast || (hasCons && data.trumpSuit && !(hasCons && players[winnerId].lastWinWasAce && isAce))) {
+          players = players.map(p => winTeam.includes(p.id) ? { ...p, score: p.score + pile.length, consecutiveWins: 0, lastWinWasAce: false } : { ...p, consecutiveWins: 0, lastWinWasAce: false });
+          wonPile = [...wonPile, ...pile];
+          pile = [];
         } else {
-          updatedPlayers = updatedPlayers.map(p => {
-            if (p.id === winId) return { ...p, consecutiveWins: p.consecutiveWins + 1, lastWinWasAce: isCurrentWinAce };
-            return { ...p, consecutiveWins: 0, lastWinWasAce: false };
-          });
+          players = players.map(p => p.id === winnerId ? { ...p, consecutiveWins: p.consecutiveWins + 1, lastWinWasAce: isAce } : { ...p, consecutiveWins: 0, lastWinWasAce: false });
         }
-
-        const ended = updatedPlayers.every(p => p.hand.length === 0);
-
-        await updateDoc(matchRef, {
-          players: updatedPlayers,
-          pile: newPile,
-          wonPile: newWonPile,
-          currentTrick: [],
-          leadSuit: null,
-          currentTurn: winId,
-          roundStatus: ended ? 'ended' : 'playing'
-        }).catch(err => handleFirestoreError(err, OperationType.UPDATE, `matches/${gameState.id}`));
-
-        if (ended && winId === 0) {
-          const xpGain = 150;
-          const updatedProfile = { 
-            ...profile, 
-            xp: profile.xp + xpGain, 
-            level: Math.floor((profile.xp + xpGain) / 1000) + 1,
-            wins: profile.wins + 1 
-          };
-          setProfile(updatedProfile);
-          syncProfileToCloud(updatedProfile);
+        await updateDoc(matchRef, { players, pile, wonPile, currentTrick: [], leadSuit: null, currentTurn: winnerId, roundStatus: wonPile.length === 52 ? 'ended' : 'playing', updatedAt: serverTimestamp() });
+        if (wonPile.length === 52 && winnerId === 0) {
+          const up = { ...profile, xp: profile.xp + 150, wins: profile.wins + 1 };
+          setProfile(up);
+          syncProfileToCloud(up);
         }
-      } catch (err) {
-        console.error("Arena: Resolution failed.", err);
-      } finally {
-        setIsProcessing(false);
-      }
+      } catch (err) { console.error(err); } finally { setIsProcessing(false); }
     }, 1200);
-
-    return () => clearTimeout(timer);
-  }, [gameState, isProcessing, profile, syncProfileToCloud, auth.currentUser?.uid]);
+    return () => clearTimeout(t);
+  }, [gameState, isProcessing, profile, syncProfileToCloud, determineTrickWinner]);
 
   const watchAd = () => {
     const toastId = toast.loading("WATCHING AD...");
@@ -1228,8 +1075,23 @@ const App: React.FC = () => {
     fetchNames();
   }, [gameState?.playerUids, view]);
 
+  // Auto-start classic matches after timeout if 2+ players (Host only)
+  useEffect(() => {
+    if (view !== 'searching' || !gameState || gameState.mode !== 'classic' || gameState.roundStatus !== 'lobby') return;
+    if (gameState.playerUids[0] !== auth.currentUser?.uid) return;
+    if (gameState.playerUids.length < 2) return;
+
+    const timeout = setTimeout(() => {
+      console.log("Auto-starting classic match with AIs due to timeout...");
+      startMatchFromLobby();
+    }, 15000); // 15 seconds timeout
+
+    return () => clearTimeout(timeout);
+  }, [gameState?.playerUids.length, view, gameState?.id, startMatchFromLobby]);
+
   const renderView = () => {
     if (view === 'searching') {
+      const playerCount = gameState?.playerUids.length || 0;
       return (
         <motion.div 
           initial={{ opacity: 0 }}
@@ -1243,11 +1105,34 @@ const App: React.FC = () => {
               transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
               className="w-32 h-32 rounded-full border-t-2 border-indigo-500 mb-8"
             ></motion.div>
-            <div className="absolute inset-0 flex items-center justify-center text-2xl animate-pulse">🃏</div>
+            <div className="absolute inset-0 flex items-center justify-center text-2xl animate-pulse">
+              {playerCount > 0 ? playerCount : '🃏'}
+            </div>
           </div>
-          <h2 className="text-2xl font-black uppercase tracking-[0.3em] animate-pulse">Searching...</h2>
-          <p className="text-white/20 text-[10px] mt-4 uppercase font-black tracking-widest">Connecting to Elite Servers</p>
+          <h2 className="text-2xl font-black uppercase tracking-[0.3em] animate-pulse">
+            {playerCount > 0 ? `FOUND ${playerCount}/4` : 'Searching...'}
+          </h2>
+          <p className="text-white/20 text-[10px] mt-4 uppercase font-black tracking-widest">
+            {playerCount === 0 ? 'Connecting to Elite Servers' : 'Waiting for more players'}
+          </p>
           
+          {playerCount >= 2 && gameState?.mode === 'classic' && (
+            <div className="mt-4 text-[8px] font-black text-indigo-400 uppercase tracking-widest animate-pulse">
+              Matching almost complete. Starting soon...
+            </div>
+          )}
+
+          {playerCount === 1 && gameState?.mode === 'classic' && (
+            <motion.button
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              onClick={startMatchFromLobby}
+              className="mt-6 text-[8px] font-black text-indigo-400 uppercase tracking-widest hover:text-indigo-300 transition-colors"
+            >
+              Start with AIs anyway?
+            </motion.button>
+          )}
+
           <motion.button 
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}

@@ -73,6 +73,8 @@ export interface GameState {
   tableCode?: string;
   playerUids: string[]; // To track real human players
   mode: 'classic' | 'private';
+  createdAt?: any;
+  updatedAt?: any;
 }
 
 export const RANK_VALUES: Record<Rank, number> = {

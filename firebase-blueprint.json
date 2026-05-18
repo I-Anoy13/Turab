@@ -67,7 +67,9 @@
         "stake": { "type": "number" },
         "tableCode": { "type": "string" },
         "playerUids": { "type": "array", "items": { "type": "string" } },
-        "mode": { "type": "string", "enum": ["classic", "private"] }
+        "mode": { "type": "string", "enum": ["classic", "private"] },
+        "createdAt": { "type": "object" },
+        "updatedAt": { "type": "object" }
       },
       "required": ["id", "players", "roundStatus", "playerUids", "mode"]
     }
