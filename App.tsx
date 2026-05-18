@@ -791,7 +791,10 @@ const App: React.FC = () => {
   }, []);
 
   const setupMatch = useCallback(async (code?: string, mode: 'classic' | 'private' = 'classic') => {
-    const matchId = code || (mode === 'private' ? 'LBY-' : 'MATCH-') + Math.random().toString(36).substring(7).toUpperCase();
+    // Generate a 6-digit numeric code for private matches
+    const numericCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const matchId = code || (mode === 'private' ? numericCode : 'MATCH-' + Math.random().toString(36).substring(7).toUpperCase());
+    
     console.log(`🛠 Setting up ${mode} match: ${matchId}`);
     
     const players: Player[] = [
@@ -829,10 +832,11 @@ const App: React.FC = () => {
   }, [profile.username, initPeerVoice, handleFirestoreError]);
 
   const joinPrivateTable = async (code: string) => {
-    if (!code) return toast.error("Enter table code.");
+    const cleanCode = code.replace(/[^0-9]/g, '');
+    if (!cleanCode) return toast.error("Enter valid numeric code.");
     setIsProcessing(true);
     try {
-      const matchRef = doc(db, 'matches', code);
+      const matchRef = doc(db, 'matches', cleanCode);
       const matchSnap = await getDoc(matchRef);
       if (!matchSnap.exists()) return toast.error("Table not found.");
       const data = matchSnap.data() as GameState;
@@ -1155,19 +1159,40 @@ const App: React.FC = () => {
     fetchNames();
   }, [gameState?.playerUids, view]);
 
+  const [searchingStartTime, setSearchingStartTime] = useState<number | null>(null);
+  const [countdown, setCountdown] = useState(10);
+
+  useEffect(() => {
+    if (view === 'searching' && gameState?.id) {
+      if (!searchingStartTime) setSearchingStartTime(Date.now());
+    } else {
+      setSearchingStartTime(null);
+    }
+  }, [view, gameState?.id, searchingStartTime]);
+
+  useEffect(() => {
+    if (!searchingStartTime || view !== 'searching') {
+      setCountdown(10);
+      return;
+    }
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - searchingStartTime;
+      setCountdown(Math.max(0, Math.ceil((10000 - elapsed) / 1000)));
+    }, 500);
+    return () => clearInterval(interval);
+  }, [searchingStartTime, view]);
+
   // Auto-start classic matches after timeout if 2+ players (Host only)
   useEffect(() => {
-    if (view !== 'searching' || !gameState || gameState.mode !== 'classic' || gameState.roundStatus !== 'lobby') return;
+    if (view !== 'searching' || !gameState || gameState.mode !== 'classic' || gameState.roundStatus !== 'lobby' || !searchingStartTime) return;
     if (gameState.playerUids[0] !== auth.currentUser?.uid) return;
     if (gameState.playerUids.length < 2) return;
 
-    const timeout = setTimeout(() => {
-      console.log("Auto-starting classic match with AIs due to timeout...");
+    if (countdown <= 0) {
+      console.log("🚀 Auto-starting classic match with AIs due to timeout...");
       startMatchFromLobby();
-    }, 15000); // 15 seconds timeout
-
-    return () => clearTimeout(timeout);
-  }, [gameState?.playerUids.length, view, gameState?.id, startMatchFromLobby]);
+    }
+  }, [gameState?.playerUids.length, view, gameState?.id, startMatchFromLobby, searchingStartTime, countdown]);
 
   const renderView = () => {
     if (view === 'searching') {
@@ -1214,10 +1239,16 @@ const App: React.FC = () => {
               <motion.div 
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="mt-8 flex items-center gap-2 px-4 py-2 bg-indigo-500/10 border border-indigo-500/20 rounded-full"
+                className="mt-8 flex flex-col items-center gap-3"
               >
-                <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse" />
-                <span className="text-[9px] font-black uppercase tracking-widest text-indigo-400">Match Stabilization Active</span>
+                <div className="flex items-center gap-2 px-4 py-2 bg-indigo-500/10 border border-indigo-500/20 rounded-full">
+                  <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse" />
+                  <span className="text-[9px] font-black uppercase tracking-widest text-indigo-400">Stable Match Found</span>
+                </div>
+                
+                <div className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em]">
+                  Gathering lobby in <span className="text-white">{countdown}s</span>
+                </div>
               </motion.div>
             )}
 
@@ -1768,29 +1799,36 @@ const App: React.FC = () => {
           {/* Join Table Modal */}
           <AnimatePresence>
             {isJoinModalOpen && (
-              <>
-                <motion.div 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  onClick={() => setIsJoinModalOpen(false)}
-                  className="fixed inset-0 bg-black/80 backdrop-blur-md z-[300]"
-                />
-                <motion.div 
-                  initial={{ scale: 0.9, opacity: 0, y: 20 }}
-                  animate={{ scale: 1, opacity: 1, y: 0 }}
-                  exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                  className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm glass-panel p-8 rounded-[2.5rem] border-white/10 z-[301] text-center"
-                >
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 flex items-center justify-center z-[300] p-4"
+              >
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    onClick={() => setIsJoinModalOpen(false)}
+                    className="absolute inset-0 bg-black/80 backdrop-blur-md"
+                  />
+                  <motion.div 
+                    initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                    animate={{ scale: 1, opacity: 1, y: 0 }}
+                    exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                    className="relative w-full max-w-sm glass-panel p-8 rounded-[2.5rem] border-white/20 shadow-2xl z-[301] text-center"
+                  >
                   <h2 className="text-2xl font-black uppercase tracking-widest mb-2 text-indigo-400">Join Table</h2>
                   <p className="text-[10px] font-black text-white/20 uppercase mb-8">Enter the secret table code</p>
                   
                   <input 
                     type="text" 
+                    inputMode="numeric"
+                    maxLength={6}
                     value={joinCode}
-                    onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-                    placeholder="LBY-XXXXXX"
-                    className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-5 text-xl font-mono font-black text-center outline-none focus:border-indigo-500/50 focus:bg-white/10 transition-all tracking-widest placeholder:text-white/10"
+                    onChange={(e) => setJoinCode(e.target.value.replace(/[^0-9]/g, ''))}
+                    placeholder="123456"
+                    className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-5 text-3xl font-mono font-black text-center outline-none focus:border-indigo-500/50 focus:bg-white/10 transition-all tracking-[0.3em] placeholder:text-white/10"
                   />
                   
                   <div className="grid grid-cols-2 gap-4 mt-8">
@@ -1809,7 +1847,7 @@ const App: React.FC = () => {
                     </button>
                   </div>
                 </motion.div>
-              </>
+              </motion.div>
             )}
           </AnimatePresence>
         </motion.div>
