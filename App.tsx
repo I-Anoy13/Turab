@@ -24,7 +24,8 @@ import {
   serverTimestamp,
   deleteDoc,
   arrayUnion,
-  getDocFromServer
+  getDocFromServer,
+  limit
 } from 'firebase/firestore';
 import { Peer } from 'peerjs';
 import { toast, Toaster } from 'sonner';
@@ -34,7 +35,7 @@ import CardComponent from './components/CardComponent';
 
 const INITIAL_COINS = 500;
 const STAKE_AMOUNT = 200;
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.3.2';
 
 enum OperationType {
   CREATE = 'create',
@@ -900,43 +901,56 @@ const App: React.FC = () => {
     
     if (mode === 'classic') {
       setView('searching');
+      const searchTimeout = setTimeout(() => {
+        if (view === 'searching') {
+          console.warn("Matchmaking timeout - falling back to lobby creation");
+          setupMatch(undefined, 'classic').then(() => setView('lobby'));
+        }
+      }, 8000);
+
       try {
-        // Matchmaking logic
+        // Matchmaking logic - simplified query to avoid composite index requirements
+        // We filter roundStatus in memory
+        console.log("Searching for classic matches...");
         const q = query(
           collection(db, 'matches'), 
-          where('roundStatus', '==', 'lobby'), 
-          where('mode', '==', 'classic')
+          where('mode', '==', 'classic'),
+          limit(20)
         );
         const snap = await getDocs(q);
         
         let matchToJoin = null;
         for (const d of snap.docs) {
           const data = d.data() as GameState;
-          if (data.playerUids.length < 4) {
+          if (data.roundStatus === 'lobby' && data.playerUids.length < 4) {
             matchToJoin = { id: d.id, ...data };
             break;
           }
         }
 
+        clearTimeout(searchTimeout);
+
         if (matchToJoin) {
+          console.log("Found match:", matchToJoin.id);
           const matchRef = doc(db, 'matches', matchToJoin.id);
           await updateDoc(matchRef, {
             playerUids: arrayUnion(auth.currentUser?.uid)
           });
-          setGameState(matchToJoin as any);
+          setGameState({ ...matchToJoin, playerUids: [...matchToJoin.playerUids, auth.currentUser!.uid] } as any);
           setView('lobby');
           toast.success("Match found!");
         } else {
+          console.log("No existing match found, creating new one...");
           await setupMatch(undefined, 'classic');
           setView('lobby');
         }
       } catch (err) {
+        clearTimeout(searchTimeout);
         console.error("Matchmaking error:", err);
         // Fallback to local game if matching fails
-        setTimeout(async () => {
-          await setupMatch(code, 'classic');
-          setView('lobby');
-        }, 1500);
+        await setupMatch(code, 'classic').catch(e => console.error("Fallback setupMatch failed:", e));
+        setView('lobby');
+        toast.info("Started new lobby due to search issues.");
       }
     } else {
       await setupMatch(undefined, 'private');
@@ -1233,6 +1247,15 @@ const App: React.FC = () => {
           </div>
           <h2 className="text-2xl font-black uppercase tracking-[0.3em] animate-pulse">Searching...</h2>
           <p className="text-white/20 text-[10px] mt-4 uppercase font-black tracking-widest">Connecting to Elite Servers</p>
+          
+          <motion.button 
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={() => setView('home')}
+            className="mt-12 text-[10px] font-black text-white/30 hover:text-white uppercase tracking-widest border border-white/10 px-8 py-3 rounded-full transition-all"
+          >
+            Cancel Search
+          </motion.button>
         </motion.div>
       );
     }
@@ -1273,34 +1296,51 @@ const App: React.FC = () => {
             <div className="space-y-4">
               {gameState?.playerUids.map((uid, i) => (
                 <div key={`lobby-player-${i}`} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10">
-                  <span className="font-black uppercase text-xs">
-                    {lobbyPlayerNames[uid] || (uid === auth.currentUser?.uid ? profile.username : 'Elite Player')}
-                  </span>
-                  <span className="text-[8px] font-black text-emerald-400 uppercase">Connected</span>
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-[10px]">
+                      {lobbyPlayerNames[uid]?.[0]?.toUpperCase() || 'P'}
+                    </div>
+                    <span className="font-black uppercase text-xs">
+                      {lobbyPlayerNames[uid] || (uid === auth.currentUser?.uid ? profile.username : 'Elite Player')}
+                    </span>
+                  </div>
+                  <span className="text-[8px] font-black text-emerald-400 uppercase bg-emerald-400/10 px-2 py-1 rounded">Connected</span>
                 </div>
               ))}
               {Array.from({ length: 4 - (gameState?.playerUids.length || 0) }).map((_, i) => (
-                <div key={`lobby-waiting-${i}`} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10 opacity-50">
-                  <span className="font-black uppercase text-xs text-white/20">Awaiting...</span>
-                  <span className="text-[6px] font-black text-white/10 uppercase">Slot {3+i}</span>
+                <div key={`lobby-waiting-${i}`} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10 opacity-30">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-[10px]">?</div>
+                    <span className="font-black uppercase text-xs text-white/20">Awaiting...</span>
+                  </div>
+                  <span className="text-[6px] font-black text-white/10 uppercase">Slot {(gameState?.playerUids.length || 0) + i + 1}</span>
                 </div>
               ))}
             </div>
             
-            {gameState?.playerUids[0] === auth.currentUser?.uid ? (
-              <motion.button 
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={startMatchFromLobby} 
-                className="gold-button w-full py-5 rounded-2xl text-lg mt-10"
+            <div className="mt-10 space-y-4">
+              {gameState?.playerUids[0] === auth.currentUser?.uid ? (
+                <motion.button 
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={startMatchFromLobby} 
+                  className="gold-button w-full py-5 rounded-2xl text-lg"
+                >
+                  Start Match
+                </motion.button>
+              ) : (
+                <div className="py-5 text-[10px] font-black text-white/20 uppercase animate-pulse">
+                  Waiting for host to start...
+                </div>
+              )}
+              
+              <button 
+                onClick={() => setView('home')}
+                className="w-full py-3 text-[8px] font-black text-white/20 hover:text-red-400 uppercase tracking-widest transition-colors"
               >
-                Start Match
-              </motion.button>
-            ) : (
-              <div className="mt-10 py-5 text-[10px] font-black text-white/20 uppercase animate-pulse">
-                Waiting for host to start...
-              </div>
-            )}
+                Leave Lobby
+              </button>
+            </div>
           </motion.div>
         </motion.div>
       );
