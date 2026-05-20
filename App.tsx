@@ -264,9 +264,16 @@ const App: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [lobbyPlayerNames, setLobbyPlayerNames] = useState<Record<string, string>>({});
   const processingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isProcessingRef = useRef(false);
+  const gameStateRef = useRef<GameState | null>(null);
+
+  useEffect(() => {
+    gameStateRef.current = gameState;
+  }, [gameState]);
 
   const setSafeProcessing = useCallback((val: boolean) => {
     setIsProcessing(val);
+    isProcessingRef.current = val;
     if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
     if (val) {
       processingTimeoutRef.current = setTimeout(() => {
@@ -929,8 +936,6 @@ const App: React.FC = () => {
     }
   }, [profile, setupMatch, syncProfileToCloud]);
 
-  const isProcessingRef = useRef(false);
-
   const startMatchFromLobby = useCallback(async () => {
     if (!gameState || isProcessingRef.current) return;
     isProcessingRef.current = true;
@@ -1050,11 +1055,23 @@ const App: React.FC = () => {
   }, []);
 
   const playCard = useCallback(async (playerId: number, card: Card) => {
-    if (!gameState || isProcessing || gameState.currentTrick.length >= 4 || gameState.currentTurn !== playerId) return;
-    if (gameState.leadSuit && card.suit !== gameState.leadSuit && gameState.players[playerId].hand.some(c => c.suit === gameState.leadSuit)) return;
+    const currentGameState = gameStateRef.current;
+    if (!currentGameState || isProcessingRef.current || currentGameState.currentTrick.length >= 4 || currentGameState.currentTurn !== playerId) {
+      console.warn("⚠️ Play rejected: Turn lock or block active.", { 
+        hasGame: !!currentGameState, 
+        proc: isProcessingRef.current, 
+        trickFull: currentGameState ? currentGameState.currentTrick.length >= 4 : false,
+        notMyTurn: currentGameState ? currentGameState.currentTurn !== playerId : false
+      });
+      return;
+    }
+    if (currentGameState.leadSuit && card.suit !== currentGameState.leadSuit && currentGameState.players[playerId].hand.some(c => c.suit === currentGameState.leadSuit)) {
+      toast.error("Must follow lead suit.");
+      return;
+    }
     
     setSafeProcessing(true);
-    const matchRef = doc(db, 'matches', gameState.id);
+    const matchRef = doc(db, 'matches', currentGameState.id);
 
     try {
       await runTransaction(db, async (transaction) => {
@@ -1072,8 +1089,6 @@ const App: React.FC = () => {
         if (data.leadSuit && card.suit !== data.leadSuit && data.trumpSuit === null) {
           newTrump = card.suit;
           newTrumpRev = trickIdx;
-          // Note: setTrumpAlert and setIsThunderActive are local effects, 
-          // we can call them here or after transaction success
         }
 
         const updatedPlayers = data.players.map(p => 
@@ -1106,19 +1121,40 @@ const App: React.FC = () => {
     } finally {
       setSafeProcessing(false);
     }
-  }, [gameState, isProcessing, playCardSound]);
+  }, [setSafeProcessing, playCardSound]);
 
   useEffect(() => {
-    if (gameState?.roundStatus === 'playing' && gameState.players[gameState.currentTurn].isAI && !isProcessing && gameState.currentTrick.length < 4) {
-      const t = setTimeout(() => {
-        const p = gameState.players[gameState.currentTurn];
-        const valid = gameState.leadSuit ? p.hand.filter(c => c.suit === gameState.leadSuit) : p.hand;
-        const card = (valid.length > 0 ? valid : p.hand)[Math.floor(Math.random() * (valid.length || p.hand.length))];
-        if (card) playCard(p.id, card);
-      }, 1000);
-      return () => clearTimeout(t);
-    }
-  }, [gameState?.currentTurn, isProcessing, gameState?.roundStatus, gameState?.leadSuit, playCard]);
+    const currentGameState = gameState;
+    if (!currentGameState) return;
+    if (currentGameState.roundStatus !== 'playing') return;
+    
+    // Safety check: is it an AI's turn?
+    const currentTurn = currentGameState.currentTurn;
+    const activePlayer = currentGameState.players[currentTurn];
+    if (!activePlayer || !activePlayer.isAI) return;
+    
+    // Only the lobby host should execute AI plays to avoid race conditions/conflicts
+    const isHost = currentGameState.playerUids[0] === auth.currentUser?.uid;
+    if (!isHost) return;
+    
+    if (currentGameState.currentTrick.length >= 4) return;
+    if (isProcessing) return;
+
+    console.log(`🤖 AI Turn matching Host: Player ${currentTurn} (${activePlayer.name}) is playing...`);
+    
+    const t = setTimeout(() => {
+      // Re-read current hand
+      const p = currentGameState.players[currentTurn];
+      const valid = currentGameState.leadSuit ? p.hand.filter(c => c.suit === currentGameState.leadSuit) : p.hand;
+      const card = (valid.length > 0 ? valid : p.hand)[Math.floor(Math.random() * (valid.length || p.hand.length))];
+      if (card) {
+        console.log(`🤖 AI playing card:`, card);
+        playCard(p.id, card);
+      }
+    }, 800); // 800ms offset for ultra-responsive game feel
+    
+    return () => clearTimeout(t);
+  }, [gameState?.currentTurn, gameState?.roundStatus, gameState?.currentTrick?.length, isProcessing, playCard]);
 
   useEffect(() => {
     if (!gameState || gameState.currentTrick.length !== 4 || isProcessing) return;
@@ -1949,6 +1985,37 @@ const App: React.FC = () => {
           </div>
         </div>
 
+        {/* Real-time Game Turn Status Banner */}
+        <div className="absolute top-[85px] md:top-[110px] left-1/2 -translate-x-1/2 z-[150] pointer-events-none select-none">
+          <motion.div 
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            key={`turn-banner-${gameState.currentTurn}-${gameState.currentTrick.length}`}
+            className={`flex items-center gap-2.5 px-6 py-2 rounded-full border shadow-lg backdrop-blur-md transition-all ${
+              gameState.currentTrick.length === 4
+                ? 'bg-amber-500/10 border-amber-500/30 shadow-amber-500/5'
+                : gameState.currentTurn === 0 
+                  ? 'bg-emerald-500/10 border-emerald-500/30 shadow-emerald-500/5' 
+                  : 'bg-indigo-500/10 border-indigo-500/30 shadow-indigo-500/5'
+            }`}
+          >
+            <div className={`w-2 h-2 rounded-full ${
+              gameState.currentTrick.length === 4
+                ? 'bg-amber-400 animate-pulse'
+                : gameState.currentTurn === 0 
+                  ? 'bg-emerald-400 animate-pulse' 
+                  : 'bg-indigo-400 animate-pulse'
+            }`} />
+            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white whitespace-nowrap">
+              {gameState.currentTrick.length === 4 
+                ? 'Resolving Trick...' 
+                : gameState.currentTurn === 0 
+                  ? 'Your Turn - Play a Card' 
+                  : `Waiting for ${gameState.players[gameState.currentTurn]?.name || 'Opponent'}...`}
+            </span>
+          </motion.div>
+        </div>
+
         <div className="absolute top-0 left-0 p-4 md:p-6 z-[150]">
           <div className="flex gap-2">
             <button onClick={() => setView('home')} className="glass-panel w-10 h-10 rounded-full flex items-center justify-center">←</button>
@@ -2047,11 +2114,27 @@ const App: React.FC = () => {
 
                 {/* Seat Info */}
                 <div className={`absolute ${positions[i]} z-[100] flex flex-col items-center`}>
-                  <div className={`w-12 h-12 rounded-full glass-panel flex items-center justify-center text-xl border-2 ${isCurrentTurn ? 'border-indigo-500 shadow-[0_0_15px_rgba(99,102,241,0.5)]' : 'border-white/10'}`}>
-                    {i === 0 ? '👤' : '🤖'}
+                  <div className="relative">
+                    <div className={`w-12 h-12 rounded-full glass-panel flex items-center justify-center text-xl border-2 transition-all duration-300 ${
+                      isCurrentTurn 
+                        ? 'border-indigo-400 scale-110 shadow-[0_0_20px_rgba(129,140,248,0.6)] bg-indigo-950/40' 
+                        : 'border-white/10'
+                    }`}>
+                      {p.isAI ? '🤖' : '👤'}
+                    </div>
+                    {isCurrentTurn && (
+                      <div className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                      </div>
+                    )}
                   </div>
-                  <div className="text-[8px] font-black uppercase mt-1 bg-black/60 px-2 py-0.5 rounded border border-white/5">{p.name}</div>
-                  <div className="text-[10px] font-black text-indigo-400">{p.score}</div>
+                  <div className={`text-[8px] font-black uppercase mt-1 bg-black/60 px-2 py-0.5 rounded border transition-all duration-300 ${
+                    isCurrentTurn 
+                      ? 'border-indigo-500/40 text-indigo-300 shadow-[0_0_10px_rgba(129,140,248,0.2)]' 
+                      : 'border-white/5 text-white/50'
+                  }`}>{p.name}</div>
+                  <div className={`text-[10px] font-black transition-all ${isCurrentTurn ? 'text-indigo-300' : 'text-indigo-400/60'}`}>{p.score}</div>
                 </div>
               </React.Fragment>
             );
