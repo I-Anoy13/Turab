@@ -2153,7 +2153,7 @@ const App: React.FC = () => {
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             key={`turn-banner-${gameState.currentTurn}-${gameState.currentTrick.length}`}
-            className={`flex items-center gap-2.5 px-6 py-2 rounded-full border shadow-lg backdrop-blur-md transition-all ${
+            className={`relative overflow-hidden flex items-center gap-2.5 px-6 py-2.5 rounded-full border shadow-lg backdrop-blur-md transition-all ${
               gameState.currentTrick.length === 4
                 ? 'bg-amber-500/10 border-amber-500/30 shadow-amber-500/5'
                 : gameState.currentTurn === myPlayerId 
@@ -2174,9 +2174,23 @@ const App: React.FC = () => {
               {gameState.currentTrick.length === 4 
                 ? 'Resolving Trick...' 
                 : gameState.currentTurn === myPlayerId 
-                  ? `Your Turn - Play a Card (${turnTimeLeft}s)` 
-                  : `Waiting for ${gameState.players[gameState.currentTurn]?.name || 'Opponent'} (${turnTimeLeft}s)`}
+                  ? 'Your Turn - Play a Card' 
+                  : `Waiting for ${gameState.players[gameState.currentTurn]?.name || 'Opponent'}`}
             </span>
+
+            {/* Premium, illuminated horizontal countdown progress bar inside status banner */}
+            {gameState.currentTrick.length !== 4 && (
+              <div 
+                className={`absolute bottom-0 left-0 h-[3px] rounded-full transition-all duration-1000 ease-linear ${
+                  turnTimeLeft <= 5 
+                    ? 'bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.8)]' 
+                    : gameState.currentTurn === myPlayerId 
+                      ? 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.8)]' 
+                      : 'bg-indigo-400 shadow-[0_0_10px_rgba(129,140,248,0.8)]'
+                }`}
+                style={{ width: `${(turnTimeLeft / 15) * 100}%` }}
+              />
+            )}
           </motion.div>
         </div>
 
@@ -2283,23 +2297,66 @@ const App: React.FC = () => {
                   <div className="relative">
                     <div className={`w-12 h-12 rounded-full glass-panel flex items-center justify-center text-xl border-2 transition-all duration-300 ${
                       isCurrentTurn 
-                        ? 'border-indigo-400 scale-110 shadow-[0_0_20px_rgba(129,140,248,0.6)] bg-indigo-950/40' 
+                        ? 'border-indigo-400 scale-110 shadow-[0_0_20px_rgba(129,140,248,0.4)] bg-indigo-950/40' 
                         : 'border-white/10'
                     }`}>
                       {p.isAI ? '🤖' : '👤'}
                     </div>
                     {isCurrentTurn && (
-                      <div className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
-                      </div>
+                      <>
+                        <svg className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-14 h-14 pointer-events-none -rotate-90 z-[120]">
+                          {/* Outer thin dark track */}
+                          <circle
+                            cx="28"
+                            cy="28"
+                            r="25"
+                            fill="transparent"
+                            stroke="rgba(255, 255, 255, 0.05)"
+                            strokeWidth="2.5"
+                          />
+                          {/* Actively reducing glowing timer path */}
+                          <circle
+                            cx="28"
+                            cy="28"
+                            r="25"
+                            fill="transparent"
+                            stroke={
+                              turnTimeLeft <= 5 
+                                ? "rgba(244, 63, 94, 0.9)" 
+                                : p.id === myPlayerId 
+                                  ? "rgba(52, 211, 153, 0.9)" 
+                                  : "rgba(129, 140, 248, 0.9)"
+                            }
+                            strokeWidth="2.5"
+                            strokeDasharray="157.08"
+                            strokeDashoffset={157.08 - (157.08 * turnTimeLeft) / 15}
+                            strokeLinecap="round"
+                            className="transition-all duration-1000 ease-linear"
+                            style={{
+                              filter: turnTimeLeft <= 5 
+                                ? "drop-shadow(0 0 4px rgba(244, 63, 94, 0.6))" 
+                                : p.id === myPlayerId 
+                                  ? "drop-shadow(0 0 4px rgba(52, 211, 153, 0.6))" 
+                                  : "drop-shadow(0 0 4px rgba(129, 140, 248, 0.6))"
+                            }}
+                          />
+                        </svg>
+                        <div className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center z-[130]">
+                          <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                            turnTimeLeft <= 5 ? 'bg-rose-400' : p.id === myPlayerId ? 'bg-emerald-400' : 'bg-indigo-400'
+                          }`}></span>
+                          <span className={`relative inline-flex rounded-full h-2 w-2 ${
+                            turnTimeLeft <= 5 ? 'bg-rose-500' : p.id === myPlayerId ? 'bg-emerald-500' : 'bg-indigo-500'
+                          }`}></span>
+                        </div>
+                      </>
                     )}
                   </div>
                   <div className={`text-[8px] font-black uppercase mt-1 bg-black/60 px-2 py-0.5 rounded border transition-all duration-300 ${
                     isCurrentTurn 
                       ? 'border-indigo-500/40 text-indigo-300 shadow-[0_0_10px_rgba(129,140,248,0.2)]' 
                       : 'border-white/5 text-white/50'
-                  }`}>{p.name} {isCurrentTurn && `(${turnTimeLeft}s)`}</div>
+                  }`}>{p.name}</div>
                   <div className={`text-[10px] font-black transition-all ${isCurrentTurn ? 'text-indigo-300' : 'text-indigo-400/60'}`}>{p.score}</div>
                 </div>
               </React.Fragment>
