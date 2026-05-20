@@ -647,10 +647,16 @@ const App: React.FC = () => {
     return gameState.players[0].score + gameState.players[2].score;
   }, [gameState]);
 
+  const myPlayerId = useMemo(() => {
+    if (!gameState || !gameState.playerUids || !auth.currentUser) return 0;
+    const idx = gameState.playerUids.indexOf(auth.currentUser.uid);
+    return idx !== -1 ? idx : 0;
+  }, [gameState]);
+
   const playerHandSorted = useMemo(() => {
     if (!gameState) return [];
-    return sortHand(gameState.players[0].hand, gameState.trumpSuit);
-  }, [gameState]);
+    return sortHand(gameState.players[myPlayerId]?.hand || [], gameState.trumpSuit);
+  }, [gameState, myPlayerId]);
 
   const currentTrickWinnerId = useMemo(() => {
     if (!gameState || gameState.currentTrick.length === 0) return null;
@@ -882,6 +888,41 @@ const App: React.FC = () => {
     }
   };
 
+  const leaveCurrentMatch = useCallback(async () => {
+    if (!gameState?.id) return;
+    const matchId = gameState.id;
+    const currentUid = auth.currentUser?.uid;
+    if (!currentUid) return;
+
+    console.log(`🚪 [LEAVE_MATCH] Leaving match: ${matchId}`);
+    try {
+      const matchRef = doc(db, 'matches', matchId);
+      await runTransaction(db, async (transaction) => {
+        const snap = await transaction.get(matchRef);
+        if (!snap.exists()) return;
+        const data = snap.data() as GameState;
+        
+        if (data.roundStatus === 'lobby') {
+          const remainingUids = data.playerUids.filter(uid => uid !== currentUid);
+          if (remainingUids.length === 0) {
+            transaction.delete(matchRef);
+            console.log(`🗑 Match ${matchId} deleted from Cloud Storage - empty.`);
+          } else {
+            transaction.update(matchRef, {
+              playerUids: remainingUids,
+              updatedAt: serverTimestamp()
+            });
+            console.log(`👥 Match ${matchId} membership updated. Remaining:`, remainingUids);
+          }
+        }
+      });
+    } catch (err) {
+      console.warn("Failed to clean up match membership on leave:", err);
+    } finally {
+      setGameState(null);
+    }
+  }, [gameState?.id]);
+
   const startNewGame = useCallback(async (mode: GameMode, code?: string) => {
     const isAdmin = profile.role === 'admin';
     if (!isAdmin && profile.coins < STAKE_AMOUNT) return toast.error("Insufficient coins.");
@@ -898,30 +939,68 @@ const App: React.FC = () => {
           collection(db, 'matches'), 
           where('mode', '==', 'classic'), 
           where('roundStatus', '==', 'lobby'), 
-          limit(5) // Reduced limit for faster response
+          limit(15) // Fetch a wider set to filter stale ones
         );
         
         const snap = await getDocs(q);
         let matchToJoin = null;
+        const nowMs = Date.now();
         
         for (const d of snap.docs) {
           const data = d.data() as GameState;
           if (data.playerUids.length < 4) { 
-            matchToJoin = { id: d.id, ...data }; 
-            break; 
+            // Only join if it is active (updated in the last 20 seconds)
+            const updatedTime = data.updatedAt?.toMillis ? data.updatedAt.toMillis() : nowMs;
+            const isFresh = (nowMs - updatedTime) < 20000;
+            
+            if (isFresh) {
+              matchToJoin = { id: d.id, ...data }; 
+              break; 
+            } else {
+              console.log(`🔌 Skipping stale/dead match lobby: ${d.id}`);
+            }
           }
         }
         
+        let joinedSuccessfully = false;
         if (matchToJoin) {
-          console.log("🤝 Joining existing match:", matchToJoin.id);
-          const newState = { ...matchToJoin, playerUids: [...matchToJoin.playerUids, auth.currentUser!.uid] };
-          setGameState(newState as any);
-          await updateDoc(doc(db, 'matches', matchToJoin.id), { 
-            playerUids: arrayUnion(auth.currentUser?.uid), 
-            updatedAt: serverTimestamp() 
-          });
+          console.log("🤝 Found active classic lobby. Attempting transition:", matchToJoin.id);
+          const matchRef = doc(db, 'matches', matchToJoin.id);
+          
+          try {
+            await runTransaction(db, async (transaction) => {
+              const sfDoc = await transaction.get(matchRef);
+              if (!sfDoc.exists()) throw "Match missing.";
+              const data = sfDoc.data() as GameState;
+              
+              if (data.playerUids.length < 4 && data.roundStatus === 'lobby') {
+                const currentUids = data.playerUids || [];
+                const updatedUids = currentUids.includes(auth.currentUser!.uid)
+                  ? currentUids
+                  : [...currentUids, auth.currentUser!.uid];
+                
+                transaction.update(matchRef, { 
+                  playerUids: updatedUids, 
+                  updatedAt: serverTimestamp() 
+                });
+                
+                matchToJoin = { ...data, playerUids: updatedUids };
+                joinedSuccessfully = true;
+              } else {
+                throw "Lobby full or started.";
+              }
+            });
+          } catch (joinErr) {
+            console.warn("Transaction join failed. Falling back to fresh match:", joinErr);
+            matchToJoin = null;
+          }
+        }
+        
+        if (joinedSuccessfully && matchToJoin) {
+          setGameState(matchToJoin as any);
+          console.log("✅ Successfully joined active match:", matchToJoin.id);
         } else {
-          console.log("✨ Creating fresh match...");
+          console.log("✨ No active fresh matches or joins failed. Creating fresh match...");
           const matchId = 'MATCH-' + Math.random().toString(36).substring(7).toUpperCase();
           await setupMatch(matchId, 'classic');
         }
@@ -1260,13 +1339,38 @@ const App: React.FC = () => {
   const [searchingStartTime, setSearchingStartTime] = useState<number | null>(null);
   const [countdown, setCountdown] = useState(10);
 
+  // Heartbeat to keep lobby alive and fresh (Host and clients together)
   useEffect(() => {
-    if (view === 'searching' && gameState?.id) {
-      if (!searchingStartTime) setSearchingStartTime(Date.now());
+    if (view !== 'searching' || !gameState?.id) return;
+    
+    // Write a regular heartbeat update to Firestore to mark this match as active/fresh
+    const interval = setInterval(async () => {
+      try {
+        const matchRef = doc(db, 'matches', gameState.id);
+        await updateDoc(matchRef, {
+          updatedAt: serverTimestamp()
+        });
+        console.log("💓 Match heartbeat updated:", gameState.id);
+      } catch (err) {
+        console.warn("Heartbeat update failed:", err);
+      }
+    }, 4500);
+
+    return () => clearInterval(interval);
+  }, [view, gameState?.id]);
+
+  useEffect(() => {
+    const playerCount = gameState?.playerUids?.length || 0;
+    // Only start countdown once we have a stable match (>= 2 players)
+    if (view === 'searching' && gameState?.id && playerCount >= 2) {
+      if (!searchingStartTime) {
+        console.log("✨ Stable match found! Starting 10s countdown.");
+        setSearchingStartTime(Date.now());
+      }
     } else {
       setSearchingStartTime(null);
     }
-  }, [view, gameState?.id, searchingStartTime]);
+  }, [view, gameState?.id, gameState?.playerUids?.length, searchingStartTime]);
 
   useEffect(() => {
     if (!searchingStartTime || view !== 'searching') {
@@ -1369,8 +1473,8 @@ const App: React.FC = () => {
               <motion.button 
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
-                onClick={() => {
-                  setGameState(null);
+                onClick={async () => {
+                  await leaveCurrentMatch();
                   setView('home');
                 }}
                 className="w-full py-4 bg-white/5 border border-white/10 rounded-xl text-[10px] font-black uppercase tracking-widest text-white/30 hover:bg-white/10 hover:text-white transition-all underline underline-offset-4 decoration-white/0 hover:decoration-white/10"
@@ -1458,7 +1562,10 @@ const App: React.FC = () => {
               )}
               
               <button 
-                onClick={() => setView('home')}
+                onClick={async () => {
+                  await leaveCurrentMatch();
+                  setView('home');
+                }}
                 className="w-full py-3 text-[8px] font-black text-white/20 hover:text-red-400 uppercase tracking-widest transition-colors"
               >
                 Leave Lobby
@@ -1994,7 +2101,7 @@ const App: React.FC = () => {
             className={`flex items-center gap-2.5 px-6 py-2 rounded-full border shadow-lg backdrop-blur-md transition-all ${
               gameState.currentTrick.length === 4
                 ? 'bg-amber-500/10 border-amber-500/30 shadow-amber-500/5'
-                : gameState.currentTurn === 0 
+                : gameState.currentTurn === myPlayerId 
                   ? 'bg-emerald-500/10 border-emerald-500/30 shadow-emerald-500/5' 
                   : 'bg-indigo-500/10 border-indigo-500/30 shadow-indigo-500/5'
             }`}
@@ -2002,14 +2109,14 @@ const App: React.FC = () => {
             <div className={`w-2 h-2 rounded-full ${
               gameState.currentTrick.length === 4
                 ? 'bg-amber-400 animate-pulse'
-                : gameState.currentTurn === 0 
+                : gameState.currentTurn === myPlayerId 
                   ? 'bg-emerald-400 animate-pulse' 
                   : 'bg-indigo-400 animate-pulse'
             }`} />
             <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white whitespace-nowrap">
               {gameState.currentTrick.length === 4 
                 ? 'Resolving Trick...' 
-                : gameState.currentTurn === 0 
+                : gameState.currentTurn === myPlayerId 
                   ? 'Your Turn - Play a Card' 
                   : `Waiting for ${gameState.players[gameState.currentTurn]?.name || 'Opponent'}...`}
             </span>
@@ -2067,7 +2174,9 @@ const App: React.FC = () => {
           )}
 
           {/* Player Seats & Opponent Fans */}
-          {gameState.players.map((p, i) => {
+          {gameState.players.map((p) => {
+            const visualSeatIdx = (p.id - myPlayerId + 4) % 4;
+
             const positions = [
               "bottom-[-40px] left-1/2 -translate-x-1/2", // South (Player)
               "left-[-40px] top-1/2 -translate-y-1/2", // West
@@ -2087,8 +2196,8 @@ const App: React.FC = () => {
             return (
               <React.Fragment key={`seat-${p.id}`}>
                 {/* Opponent Card Fan */}
-                {p.id !== 0 && (
-                  <div className={`absolute ${fanPositions[i]} pointer-events-none z-20`}>
+                {p.id !== myPlayerId && (
+                  <div className={`absolute ${fanPositions[visualSeatIdx]} pointer-events-none z-20`}>
                     <div className="relative flex items-center justify-center">
                       {p.hand.slice(0, 6).map((_, idx) => { // Show max 6 for cleaner look
                         const total = Math.min(p.hand.length, 6);
@@ -2113,7 +2222,7 @@ const App: React.FC = () => {
                 )}
 
                 {/* Seat Info */}
-                <div className={`absolute ${positions[i]} z-[100] flex flex-col items-center`}>
+                <div className={`absolute ${positions[visualSeatIdx]} z-[100] flex flex-col items-center`}>
                   <div className="relative">
                     <div className={`w-12 h-12 rounded-full glass-panel flex items-center justify-center text-xl border-2 transition-all duration-300 ${
                       isCurrentTurn 
@@ -2174,8 +2283,12 @@ const App: React.FC = () => {
               const isWinning = currentTrickWinnerId === t.playerId;
               const isTrump = gameState.trumpSuit === t.card.suit;
               
+              const visualIdx = (t.playerId - myPlayerId + 4) % 4;
+              const playedByPlayer = gameState.players[t.playerId];
+              const isAI = playedByPlayer?.isAI ?? true;
+
               return (
-                <div key={`trick-card-${t.playerId}-${t.card.suit}-${t.card.rank}-${idx}`} className={`absolute z-[50] ${offsets[t.playerId]}`}>
+                <div key={`trick-card-${t.playerId}-${t.card.suit}-${t.card.rank}-${idx}`} className={`absolute z-[50] ${offsets[visualIdx]}`}>
                   <div className={`animate-deal ${isTrump ? 'animate-trump-play' : ''}`}>
                     <div className="relative">
                       <CardComponent 
@@ -2184,7 +2297,7 @@ const App: React.FC = () => {
                         className={`scale-75 md:scale-100 shadow-2xl transition-all duration-300 ${isWinning ? 'winner-highlight' : ''} ${isTrump ? 'shadow-[0_0_30px_rgba(99,102,241,0.8)]' : ''}`} 
                       />
                       <div className={`absolute -top-4 -right-4 w-10 h-10 rounded-full glass-panel border-2 flex items-center justify-center text-lg shadow-2xl z-[60] ${isWinning ? 'border-yellow-400 bg-yellow-400/20' : 'border-white/30 bg-indigo-900/80'}`}>
-                        {t.playerId === 0 ? '👤' : '🤖'}
+                        {isAI ? '🤖' : '👤'}
                       </div>
                       {isWinning && (
                         <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 bg-yellow-400 text-black text-[10px] font-black px-3 py-1 rounded-full uppercase whitespace-nowrap shadow-[0_0_15px_rgba(251,191,36,0.5)] border border-black/20 animate-pulse">
@@ -2219,8 +2332,8 @@ const App: React.FC = () => {
         >
           {playerHandSorted.map((card, idx) => {
             const cardKey = `${card.suit}-${card.rank}-${idx}`;
-            const isMyTurn = gameState.currentTurn === 0 && !isProcessing && gameState.currentTrick.length < 4;
-            const isSelectable = isMyTurn && (!gameState.leadSuit || card.suit === gameState.leadSuit || !gameState.players[0].hand.some(c => c.suit === gameState.leadSuit));
+            const isMyTurn = gameState.currentTurn === myPlayerId && !isProcessing && gameState.currentTrick.length < 4;
+            const isSelectable = isMyTurn && (!gameState.leadSuit || card.suit === gameState.leadSuit || !gameState.players[myPlayerId]?.hand.some(c => c.suit === gameState.leadSuit));
             
             // Fanning logic
             const total = playerHandSorted.length;
@@ -2261,7 +2374,7 @@ const App: React.FC = () => {
 
             const handleCardPlay = () => {
               setHoveredCardKey(null);
-              playCard(0, card);
+              playCard(myPlayerId, card);
             };
 
             return (
