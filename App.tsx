@@ -949,9 +949,9 @@ const App: React.FC = () => {
         for (const d of snap.docs) {
           const data = d.data() as GameState;
           if (data.playerUids.length < 4) { 
-            // Only join if it is active (updated in the last 20 seconds)
+            // Only join if it is active (updated in the last 5 minutes, safe for clock skew)
             const updatedTime = data.updatedAt?.toMillis ? data.updatedAt.toMillis() : nowMs;
-            const isFresh = (nowMs - updatedTime) < 20000;
+            const isFresh = Math.abs(nowMs - updatedTime) < 300000;
             
             if (isFresh) {
               matchToJoin = { id: d.id, ...data }; 
@@ -1360,17 +1360,15 @@ const App: React.FC = () => {
   }, [view, gameState?.id]);
 
   useEffect(() => {
-    const playerCount = gameState?.playerUids?.length || 0;
-    // Only start countdown once we have a stable match (>= 2 players)
-    if (view === 'searching' && gameState?.id && playerCount >= 2) {
+    if (view === 'searching' && gameState?.id) {
       if (!searchingStartTime) {
-        console.log("✨ Stable match found! Starting 10s countdown.");
+        console.log("✨ Matchmaking queue started! Starting 10s countdown.");
         setSearchingStartTime(Date.now());
       }
     } else {
       setSearchingStartTime(null);
     }
-  }, [view, gameState?.id, gameState?.playerUids?.length, searchingStartTime]);
+  }, [view, gameState?.id, searchingStartTime]);
 
   useEffect(() => {
     if (!searchingStartTime || view !== 'searching') {
@@ -1384,14 +1382,13 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [searchingStartTime, view]);
 
-  // Auto-start classic matches after timeout if 2+ players (Host only)
+  // Auto-start classic matches after timeout (Host only)
   useEffect(() => {
     if (view !== 'searching' || !gameState || gameState.mode !== 'classic' || gameState.roundStatus !== 'lobby' || !searchingStartTime) return;
     if (gameState.playerUids[0] !== auth.currentUser?.uid) return;
-    if (gameState.playerUids.length < 2) return;
 
     if (countdown <= 0) {
-      console.log("🚀 Auto-starting classic match with AIs due to timeout...");
+      console.log("🚀 Auto-starting classic match due to timeout...");
       startMatchFromLobby();
     }
   }, [gameState?.playerUids.length, view, gameState?.id, startMatchFromLobby, searchingStartTime, countdown]);
@@ -1437,7 +1434,7 @@ const App: React.FC = () => {
                 : 'Awaiting remaining challengers to finalize the table.'}
             </p>
             
-            {playerCount >= 2 && gameState?.mode === 'classic' && (
+            {playerCount >= 1 && gameState?.mode === 'classic' && (
               <motion.div 
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -1445,7 +1442,9 @@ const App: React.FC = () => {
               >
                 <div className="flex items-center gap-2 px-4 py-2 bg-indigo-500/10 border border-indigo-500/20 rounded-full">
                   <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse" />
-                  <span className="text-[9px] font-black uppercase tracking-widest text-indigo-400">Stable Match Found</span>
+                  <span className="text-[9px] font-black uppercase tracking-widest text-indigo-400">
+                    {playerCount >= 2 ? 'Stable Match Found' : 'Searching for players'}
+                  </span>
                 </div>
                 
                 <div className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em]">
