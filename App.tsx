@@ -287,6 +287,7 @@ const App: React.FC = () => {
   const [trumpAlert, setTrumpAlert] = useState<{ suit: Suit; playerName: string; type: 'announced' | 'challenged' } | null>(null);
   const [isThunderActive, setIsThunderActive] = useState(false);
   const [hoveredCardKey, setHoveredCardKey] = useState<string | null>(null);
+  const [turnTimeLeft, setTurnTimeLeft] = useState(15);
   
   // Login State
   const [loginEmail, setLoginEmail] = useState('');
@@ -1235,6 +1236,61 @@ const App: React.FC = () => {
     return () => clearTimeout(t);
   }, [gameState?.currentTurn, gameState?.roundStatus, gameState?.currentTrick?.length, isProcessing, playCard]);
 
+  // Turn time countdown manager
+  useEffect(() => {
+    if (view !== 'game' || !gameState || gameState.roundStatus !== 'playing' || gameState.currentTrick.length >= 4) {
+      setTurnTimeLeft(15);
+      return;
+    }
+
+    setTurnTimeLeft(15);
+
+    const interval = setInterval(() => {
+      setTurnTimeLeft(p => {
+        if (p <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return p - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [view, gameState?.currentTurn, gameState?.currentTrick?.length, gameState?.roundStatus, gameState?.id]);
+
+  // Handle auto-playing a random valid card if turn countdown hits 0
+  useEffect(() => {
+    if (view !== 'game' || !gameState || gameState.roundStatus !== 'playing' || gameState.currentTrick.length >= 4) return;
+    if (turnTimeLeft !== 0) return;
+
+    const currentTurn = gameState.currentTurn;
+    const activePlayer = gameState.players[currentTurn];
+    if (!activePlayer || activePlayer.hand.length === 0) return;
+
+    const isMyTurn = currentTurn === myPlayerId;
+    const isHost = gameState.playerUids[0] === auth.currentUser?.uid;
+
+    if (isMyTurn) {
+      // Auto-play for myself
+      const valid = gameState.leadSuit ? activePlayer.hand.filter(c => c.suit === gameState.leadSuit) : activePlayer.hand;
+      const cardsToSelectFrom = valid.length > 0 ? valid : activePlayer.hand;
+      const card = cardsToSelectFrom[Math.floor(Math.random() * cardsToSelectFrom.length)];
+      if (card) {
+        console.log(`⏱️ Auto-playing card due to timeout (My Turn):`, card);
+        playCard(myPlayerId, card);
+      }
+    } else if (isHost) {
+      // Auto-play for other player if idle/disconnected (triggered by Host)
+      const valid = gameState.leadSuit ? activePlayer.hand.filter(c => c.suit === gameState.leadSuit) : activePlayer.hand;
+      const cardsToSelectFrom = valid.length > 0 ? valid : activePlayer.hand;
+      const card = cardsToSelectFrom[Math.floor(Math.random() * cardsToSelectFrom.length)];
+      if (card) {
+        console.log(`⏱️ Host auto-playing card for idle player ${activePlayer.name}:`, card);
+        playCard(activePlayer.id, card);
+      }
+    }
+  }, [turnTimeLeft, view, gameState, myPlayerId, playCard]);
+
   useEffect(() => {
     if (!gameState || gameState.currentTrick.length !== 4 || isProcessing) return;
     const trickId = gameState.currentTrick.map(t => `${t.playerId}-${t.card.suit}-${t.card.rank}`).join('|');
@@ -2112,12 +2168,14 @@ const App: React.FC = () => {
                   ? 'bg-emerald-400 animate-pulse' 
                   : 'bg-indigo-400 animate-pulse'
             }`} />
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white whitespace-nowrap">
+            <span className={`text-[10px] font-black uppercase tracking-[0.2em] whitespace-nowrap transition-colors duration-300 ${
+              gameState.currentTrick.length !== 4 && turnTimeLeft <= 5 ? 'text-rose-400 animate-pulse font-extrabold' : 'text-white'
+            }`}>
               {gameState.currentTrick.length === 4 
                 ? 'Resolving Trick...' 
                 : gameState.currentTurn === myPlayerId 
-                  ? 'Your Turn - Play a Card' 
-                  : `Waiting for ${gameState.players[gameState.currentTurn]?.name || 'Opponent'}...`}
+                  ? `Your Turn - Play a Card (${turnTimeLeft}s)` 
+                  : `Waiting for ${gameState.players[gameState.currentTurn]?.name || 'Opponent'} (${turnTimeLeft}s)`}
             </span>
           </motion.div>
         </div>
@@ -2241,7 +2299,7 @@ const App: React.FC = () => {
                     isCurrentTurn 
                       ? 'border-indigo-500/40 text-indigo-300 shadow-[0_0_10px_rgba(129,140,248,0.2)]' 
                       : 'border-white/5 text-white/50'
-                  }`}>{p.name}</div>
+                  }`}>{p.name} {isCurrentTurn && `(${turnTimeLeft}s)`}</div>
                   <div className={`text-[10px] font-black transition-all ${isCurrentTurn ? 'text-indigo-300' : 'text-indigo-400/60'}`}>{p.score}</div>
                 </div>
               </React.Fragment>
