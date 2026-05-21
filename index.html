@@ -184,14 +184,16 @@
             pointer-events: auto;
             transform-origin: bottom center;
         }
-        .wing-card:hover {
-            filter: brightness(1.2) drop-shadow(0 0 10px rgba(255,255,255,0.4));
-        }
-        /* When hovering, pull ONLY the specific card up slightly more */
-        .wing-card:hover > div {
-            transform: translateY(-20px) scale(1.1) rotate(0deg) !important;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.8);
-            z-index: 3000 !important;
+        @media (hover: hover) {
+            .wing-card:hover {
+                filter: brightness(1.2) drop-shadow(0 0 10px rgba(255,255,255,0.4));
+            }
+            /* When hovering, pull ONLY the specific card up slightly more */
+            .wing-card:hover > div {
+                transform: translateY(-20px) scale(1.1) rotate(0deg) !important;
+                box-shadow: 0 20px 40px rgba(0,0,0,0.8);
+                z-index: 3000 !important;
+            }
         }
 
         @keyframes lightning-flash {

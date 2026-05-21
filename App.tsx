@@ -250,6 +250,8 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, { hasError: boolean; e
   }
 }
 
+const isTouchDevice = typeof window !== 'undefined' && (('ontouchstart' in window) || (navigator.maxTouchPoints > 0));
+
 const App: React.FC = () => {
   const [view, setView] = useState<AppView>('login');
   const [profile, setProfile] = useState<UserProfile>({ 
@@ -1135,6 +1137,7 @@ const App: React.FC = () => {
   }, []);
 
   const playCard = useCallback(async (playerId: number, card: Card) => {
+    setHoveredCardKey(null);
     const currentGameState = gameStateRef.current;
     if (!currentGameState || isProcessingRef.current || currentGameState.currentTrick.length >= 4 || currentGameState.currentTurn !== playerId) {
       console.warn("⚠️ Play rejected: Turn lock or block active.", { 
@@ -2147,51 +2150,21 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Real-time Game Turn Status Banner */}
-        <div className="absolute top-[85px] md:top-[110px] left-1/2 -translate-x-1/2 z-[150] pointer-events-none select-none">
-          <motion.div 
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            key={`turn-banner-${gameState.currentTurn}-${gameState.currentTrick.length}`}
-            className={`relative overflow-hidden flex items-center gap-2.5 px-6 py-2.5 rounded-full border shadow-lg backdrop-blur-md transition-all ${
-              gameState.currentTrick.length === 4
-                ? 'bg-amber-500/10 border-amber-500/30 shadow-amber-500/5'
-                : gameState.currentTurn === myPlayerId 
-                  ? 'bg-emerald-500/10 border-emerald-500/30 shadow-emerald-500/5' 
-                  : 'bg-indigo-500/10 border-indigo-500/30 shadow-indigo-500/5'
-            }`}
-          >
-            <div className={`w-2 h-2 rounded-full ${
-              gameState.currentTrick.length === 4
-                ? 'bg-amber-400 animate-pulse'
-                : gameState.currentTurn === myPlayerId 
-                  ? 'bg-emerald-400 animate-pulse' 
-                  : 'bg-indigo-400 animate-pulse'
-            }`} />
-            <span className={`text-[10px] font-black uppercase tracking-[0.2em] whitespace-nowrap transition-colors duration-300 ${
-              gameState.currentTrick.length !== 4 && turnTimeLeft <= 5 ? 'text-rose-400 animate-pulse font-extrabold' : 'text-white'
-            }`}>
-              {gameState.currentTrick.length === 4 
-                ? 'Resolving Trick...' 
-                : gameState.currentTurn === myPlayerId 
-                  ? 'Your Turn - Play a Card' 
-                  : `Waiting for ${gameState.players[gameState.currentTurn]?.name || 'Opponent'}`}
-            </span>
-
-            {/* Premium, illuminated horizontal countdown progress bar inside status banner */}
-            {gameState.currentTrick.length !== 4 && (
-              <div 
-                className={`absolute bottom-0 left-0 h-[3px] rounded-full transition-all duration-1000 ease-linear ${
-                  turnTimeLeft <= 5 
-                    ? 'bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.8)]' 
-                    : gameState.currentTurn === myPlayerId 
-                      ? 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.8)]' 
-                      : 'bg-indigo-400 shadow-[0_0_10px_rgba(129,140,248,0.8)]'
-                }`}
-                style={{ width: `${(turnTimeLeft / 15) * 100}%` }}
-              />
-            )}
-          </motion.div>
+        {/* Sleek, tiny central game status indicator in the header space */}
+        <div className="absolute top-6 left-1/2 -translate-x-1/2 z-[150] pointer-events-none select-none flex flex-col items-center gap-1">
+          {gameState.currentTrick.length === 4 ? (
+            <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/10 border border-amber-500/20 rounded-full backdrop-blur-md shadow-[0_4px_12px_rgba(0,0,0,0.5)]">
+              <div className="w-1 h-1 bg-amber-400 rounded-full animate-pulse" />
+              <span className="text-[8px] font-black tracking-[0.15em] text-amber-400 uppercase">Resolving Trick</span>
+            </div>
+          ) : gameState.currentTurn !== myPlayerId ? (
+            <div className="flex items-center gap-1.5 px-3 py-1 bg-black/40 border border-white/5 rounded-full backdrop-blur-md shadow-[0_4px_12px_rgba(0,0,0,0.5)]">
+              <div className="w-1 h-1 bg-indigo-400/80 rounded-full animate-pulse" />
+              <span className="text-[8px] font-black tracking-[0.15em] text-white/45 uppercase">
+                {gameState.players[gameState.currentTurn]?.name || 'Opponent'}'s Turn
+              </span>
+            </div>
+          ) : null}
         </div>
 
         <div className="absolute top-0 left-0 p-4 md:p-6 z-[150]">
@@ -2431,6 +2404,20 @@ const App: React.FC = () => {
           </div>
         </div>
 
+        {/* Compact, floating, sleek Your Turn overlay indicator right above player cards */}
+        {gameState.currentTurn === myPlayerId && gameState.roundStatus === 'playing' && gameState.currentTrick.length < 4 && (
+          <div className="absolute bottom-[230px] md:bottom-[280px] left-1/2 -translate-x-1/2 z-[400] pointer-events-none select-none">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-full shadow-[0_4px_15px_rgba(52,211,153,0.15)] backdrop-blur-md"
+            >
+              <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping" />
+              <span className="text-[9px] font-black uppercase tracking-[0.2em] text-emerald-400">Your Turn</span>
+            </motion.div>
+          </div>
+        )}
+
         <div 
           className="card-wing-container w-full max-w-[100vw]"
           onTouchMove={(e) => {
@@ -2496,8 +2483,8 @@ const App: React.FC = () => {
                 key={cardKey} 
                 className="wing-card"
                 data-card-key={cardKey}
-                onMouseEnter={() => setHoveredCardKey(cardKey)}
-                onMouseLeave={() => setHoveredCardKey(null)}
+                onMouseEnter={() => { if (!isTouchDevice) setHoveredCardKey(cardKey); }}
+                onMouseLeave={() => { if (!isTouchDevice) setHoveredCardKey(null); }}
                 style={{
                   transform: `translate(${x}px, ${y + popupOffset}px) rotate(${angle}deg)`,
                   zIndex: isCardHovered ? 3000 : ((isSuitHovered || isLeadSuitPop) ? 2000 : idx)
