@@ -4,7 +4,8 @@ import { Card, Suit } from '../types';
 interface CardComponentProps {
   card?: Card;
   hidden?: boolean;
-  onClick?: () => void;
+  onClick?: (e?: React.MouseEvent) => void;
+  onTouchEnd?: (e?: React.TouchEvent) => void;
   disabled?: boolean;
   className?: string;
   style?: React.CSSProperties;
@@ -29,6 +30,7 @@ const CardComponent: React.FC<CardComponentProps> = ({
   card, 
   hidden = false, 
   onClick, 
+  onTouchEnd,
   disabled = false,
   className = "",
   style,
@@ -57,6 +59,7 @@ const CardComponent: React.FC<CardComponentProps> = ({
   return (
     <div 
       onClick={!disabled ? onClick : undefined}
+      onTouchEnd={!disabled ? onTouchEnd : undefined}
       style={style}
       className={`
         ${baseClasses} ${s.bg} ${s.border} flex flex-col justify-between p-1.5 md:p-3 cursor-pointer

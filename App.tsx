@@ -252,6 +252,16 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, { hasError: boolean; e
 
 const isTouchDevice = typeof window !== 'undefined' && (('ontouchstart' in window) || (navigator.maxTouchPoints > 0));
 
+const getNumericPlayerId = (uid: string): string => {
+  if (!uid) return '00000000';
+  let hash = 5381;
+  for (let i = 0; i < uid.length; i++) {
+    hash = (hash * 33) ^ uid.charCodeAt(i);
+  }
+  const positive = Math.abs(hash);
+  return (positive % 900000000 + 100000000).toString();
+};
+
 const App: React.FC = () => {
   const [view, setView] = useState<AppView>('login');
   const [profile, setProfile] = useState<UserProfile>({ 
@@ -348,6 +358,15 @@ const App: React.FC = () => {
       // First try searching by Turab ID (User UID)
       let friendDoc: any = await getDoc(doc(db, 'users', friendSearch)).catch(() => null);
       
+      // If not found by direct doc ID, try searching by gamerId (9-digit Player ID)
+      if (!friendDoc || !friendDoc.exists()) {
+        const qGamer = query(collection(db, 'users'), where('gamerId', '==', friendSearch));
+        const qSnapsGamer = await getDocs(qGamer).catch(() => null);
+        if (qSnapsGamer && !qSnapsGamer.empty) {
+          friendDoc = qSnapsGamer.docs[0];
+        }
+      }
+
       // If not found by ID, try by exact username
       if (!friendDoc || !friendDoc.exists()) {
         const q = query(collection(db, 'users'), where('username', '==', friendSearch));
@@ -558,6 +577,10 @@ const App: React.FC = () => {
             
             if (userSnap && userSnap.exists()) {
               const cloudProfile = userSnap.data() as UserProfile;
+              if (!cloudProfile.gamerId) {
+                cloudProfile.gamerId = getNumericPlayerId(user.uid);
+                syncProfileToCloud(cloudProfile);
+              }
               if (user.email === 'anoypak3@gmail.com' && cloudProfile.role !== 'admin') {
                 cloudProfile.role = 'admin';
                 syncProfileToCloud(cloudProfile);
@@ -568,6 +591,7 @@ const App: React.FC = () => {
                 const newProfile: UserProfile = {
                   ...prev,
                   turab_id: user.uid,
+                  gamerId: getNumericPlayerId(user.uid),
                   username: signupUsernameRef.current || user.displayName || user.email?.split('@')[0] || 'Elite Player',
                   role: user.email === 'anoypak3@gmail.com' ? 'admin' : 'user',
                   friends: []
@@ -1849,12 +1873,14 @@ const App: React.FC = () => {
                   <div className={`text-[7px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${userRank.bg} ${userRank.color} border ${userRank.border} w-fit`}>{userRank.title}</div>
                   <div 
                     onClick={() => {
-                      navigator.clipboard.writeText(profile.turab_id);
-                      toast.success("ID copied!");
+                      const idToCopy = profile.gamerId || getNumericPlayerId(profile.turab_id);
+                      navigator.clipboard.writeText(idToCopy);
+                      toast.success("Player ID copied!");
                     }}
-                    className="text-[6px] font-mono text-white/20 hover:text-indigo-400 transition-colors cursor-pointer flex items-center gap-1"
+                    className="text-[8px] font-mono font-black text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer flex items-center gap-1 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-lg"
+                    title="Copy Player ID"
                   >
-                    ID: {profile.turab_id.slice(0, 8)}... 📋
+                    ID: {profile.gamerId || getNumericPlayerId(profile.turab_id)} 📋
                   </div>
                 </div>
                 <h2 className="text-xl font-black tracking-tight">{profile.username}</h2>
@@ -2150,22 +2176,7 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Sleek, tiny central game status indicator in the header space */}
-        <div className="absolute top-6 left-1/2 -translate-x-1/2 z-[150] pointer-events-none select-none flex flex-col items-center gap-1">
-          {gameState.currentTrick.length === 4 ? (
-            <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/10 border border-amber-500/20 rounded-full backdrop-blur-md shadow-[0_4px_12px_rgba(0,0,0,0.5)]">
-              <div className="w-1 h-1 bg-amber-400 rounded-full animate-pulse" />
-              <span className="text-[8px] font-black tracking-[0.15em] text-amber-400 uppercase">Resolving Trick</span>
-            </div>
-          ) : gameState.currentTurn !== myPlayerId ? (
-            <div className="flex items-center gap-1.5 px-3 py-1 bg-black/40 border border-white/5 rounded-full backdrop-blur-md shadow-[0_4px_12px_rgba(0,0,0,0.5)]">
-              <div className="w-1 h-1 bg-indigo-400/80 rounded-full animate-pulse" />
-              <span className="text-[8px] font-black tracking-[0.15em] text-white/45 uppercase">
-                {gameState.players[gameState.currentTurn]?.name || 'Opponent'}'s Turn
-              </span>
-            </div>
-          ) : null}
-        </div>
+        {/* Sleek central space remains clean and premium */}
 
         <div className="absolute top-0 left-0 p-4 md:p-6 z-[150]">
           <div className="flex gap-2">
@@ -2473,7 +2484,18 @@ const App: React.FC = () => {
               popupOffset = isMobile ? -30 : -45; // Normal pop for the suit/lead group
             }
 
-            const handleCardPlay = () => {
+            const handleCardPlay = (e?: React.MouseEvent) => {
+              if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+              }
+              setHoveredCardKey(null);
+              playCard(myPlayerId, card);
+            };
+
+            const handleCardPlayTouch = (e: React.TouchEvent) => {
+              e.preventDefault();
+              e.stopPropagation();
               setHoveredCardKey(null);
               playCard(myPlayerId, card);
             };
@@ -2485,6 +2507,7 @@ const App: React.FC = () => {
                 data-card-key={cardKey}
                 onMouseEnter={() => { if (!isTouchDevice) setHoveredCardKey(cardKey); }}
                 onMouseLeave={() => { if (!isTouchDevice) setHoveredCardKey(null); }}
+                onTouchStart={() => { if (isTouchDevice) setHoveredCardKey(cardKey); }}
                 style={{
                   transform: `translate(${x}px, ${y + popupOffset}px) rotate(${angle}deg)`,
                   zIndex: isCardHovered ? 3000 : ((isSuitHovered || isLeadSuitPop) ? 2000 : idx)
@@ -2493,7 +2516,8 @@ const App: React.FC = () => {
                 <CardComponent 
                   card={card} 
                   skin={profile.activeSkin} 
-                  onClick={handleCardPlay} 
+                  onClick={!isTouchDevice ? handleCardPlay : undefined}
+                  onTouchEnd={isTouchDevice ? handleCardPlayTouch : undefined}
                   disabled={!isSelectable && isMyTurn} 
                   className={`${isMobile ? "scale-[0.75]" : ""} ${isTrump ? 'ring-2 ring-indigo-400 shadow-[0_0_15px_rgba(99,102,241,0.6)]' : ''}`}
                 />

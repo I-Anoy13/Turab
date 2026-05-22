@@ -27,6 +27,7 @@ export interface Friend {
 
 export interface UserProfile {
   turab_id: string;
+  gamerId?: string;
   coins: number;
   wins: number;
   losses: number;
