@@ -363,8 +363,8 @@ const App: React.FC = () => {
     const checkPing = async () => {
       const start = performance.now();
       try {
-        await fetch(`/?_ping=${Date.now()}`, { 
-          method: 'HEAD', 
+        await fetch(`/ping.txt?_pk=${Date.now()}`, { 
+          method: 'GET', 
           cache: 'no-store',
           headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
         });
@@ -1218,50 +1218,42 @@ const App: React.FC = () => {
     const matchRef = doc(db, 'matches', currentGameState.id);
 
     try {
-      await runTransaction(db, async (transaction) => {
-        const sfDoc = await transaction.get(matchRef);
-        if (!sfDoc.exists()) throw "Match does not exist!";
-        
-        const data = sfDoc.data() as GameState;
-        if (data.currentTurn !== playerId) throw "Wait for your turn.";
-        if (data.currentTrick.length >= 4) throw "Trick already full.";
+      let newTrump = currentGameState.trumpSuit;
+      let newTrumpRev = currentGameState.trumpRevealedInTrick;
+      const trickIdx = currentGameState.wonPile.length / 4;
 
-        let newTrump = data.trumpSuit;
-        let newTrumpRev = data.trumpRevealedInTrick;
-        const trickIdx = data.wonPile.length / 4;
+      if (currentGameState.leadSuit && card.suit !== currentGameState.leadSuit && currentGameState.trumpSuit === null) {
+        newTrump = card.suit;
+        newTrumpRev = trickIdx;
+      }
 
-        if (data.leadSuit && card.suit !== data.leadSuit && data.trumpSuit === null) {
-          newTrump = card.suit;
-          newTrumpRev = trickIdx;
-        }
+      const updatedPlayers = currentGameState.players.map(p => 
+        p.id === playerId 
+          ? { ...p, hand: p.hand.filter(c => c.suit !== card.suit || c.rank !== card.rank) } 
+          : p
+      );
 
-        const updatedPlayers = data.players.map(p => 
-          p.id === playerId 
-            ? { ...p, hand: p.hand.filter(c => c.suit !== card.suit || c.rank !== card.rank) } 
-            : p
-        );
-
-        transaction.update(matchRef, { 
-          players: updatedPlayers, 
-          currentTrick: [...data.currentTrick, { playerId, card }], 
-          leadSuit: data.leadSuit || card.suit, 
-          trumpSuit: newTrump, 
-          trumpRevealedInTrick: newTrumpRev, 
-          currentTurn: (data.currentTurn + 1) % 4,
-          updatedAt: serverTimestamp()
-        });
-
-        // Trigger side effects locally if it was trump reveal
-        if (newTrump !== data.trumpSuit) {
-          setTrumpAlert({ suit: card.suit, playerName: data.players[playerId].name, type: 'announced' });
-          setIsThunderActive(true);
-          setTimeout(() => { setIsThunderActive(false); setTrumpAlert(null); }, 2000);
-        }
+      await updateDoc(matchRef, { 
+        players: updatedPlayers, 
+        currentTrick: [...currentGameState.currentTrick, { playerId, card }], 
+        leadSuit: currentGameState.leadSuit || card.suit, 
+        trumpSuit: newTrump, 
+        trumpRevealedInTrick: newTrumpRev, 
+        currentTurn: (currentGameState.currentTurn + 1) % 4,
+        updatedAt: serverTimestamp()
       });
+
       playCardSound();
+
+      // Trigger side effects locally if it was trump reveal
+      if (newTrump !== currentGameState.trumpSuit) {
+        setTrumpAlert({ suit: card.suit, playerName: currentGameState.players[playerId].name, type: 'announced' });
+        setIsThunderActive(true);
+        setTimeout(() => { setIsThunderActive(false); setTrumpAlert(null); }, 2000);
+      }
     } catch (err: any) {
-      console.error("Play Transaction Failed:", err);
-      toast.error(typeof err === 'string' ? err : "Sync error, try again.");
+      console.error("Play Failed:", err);
+      toast.error("Sync error, try again.");
     } finally {
       setSafeProcessing(false);
     }
@@ -1295,7 +1287,7 @@ const App: React.FC = () => {
         console.log(`🤖 AI playing card:`, card);
         playCard(p.id, card);
       }
-    }, 800); // 800ms offset for ultra-responsive game feel
+    }, 350); // 350ms offset for ultra-snappy and responsive game feel
     
     return () => clearTimeout(t);
   }, [gameState?.currentTurn, gameState?.roundStatus, gameState?.currentTrick?.length, isProcessing, playCard]);
@@ -1419,7 +1411,7 @@ const App: React.FC = () => {
       } finally { 
         setSafeProcessing(false); 
       }
-    }, 800);
+    }, 400);
     return () => clearTimeout(t);
   }, [gameState, isProcessing, profile, syncProfileToCloud, determineTrickWinner]);
 
