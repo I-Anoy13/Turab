@@ -351,6 +351,43 @@ const App: React.FC = () => {
     };
   }, []);
 
+  const [ping, setPing] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (isOffline) {
+      setPing(null);
+      return;
+    }
+    
+    let active = true;
+    const checkPing = async () => {
+      const start = performance.now();
+      try {
+        await fetch(`/?_ping=${Date.now()}`, { 
+          method: 'HEAD', 
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+        });
+        const end = performance.now();
+        if (active) {
+          setPing(Math.round(end - start));
+        }
+      } catch (err) {
+        const end = performance.now();
+        if (active) {
+          setPing(Math.round(end - start));
+        }
+      }
+    };
+
+    checkPing();
+    const interval = setInterval(checkPing, 4000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [isOffline]);
+
   const addFriend = async () => {
     if (!friendSearch) return;
     setIsSearchingFriend(true);
@@ -1382,7 +1419,7 @@ const App: React.FC = () => {
       } finally { 
         setSafeProcessing(false); 
       }
-    }, 1500);
+    }, 800);
     return () => clearTimeout(t);
   }, [gameState, isProcessing, profile, syncProfileToCloud, determineTrickWinner]);
 
@@ -2580,6 +2617,26 @@ const App: React.FC = () => {
         {renderView()}
         <div className="fixed top-3 right-4 px-2 py-1 bg-black/30 backdrop-blur-md rounded-full text-[9px] font-bold text-white/50 select-none pointer-events-none z-[9999] uppercase tracking-widest border border-white/10">
           v{APP_VERSION}
+        </div>
+        <div className="fixed bottom-3 right-4 flex items-center gap-1.5 px-2.5 py-1 bg-black/40 backdrop-blur-md rounded-full text-[9px] font-black tracking-widest text-white/50 select-none pointer-events-none z-[9999] uppercase border border-white/5">
+          <span className={`w-1.5 h-1.5 rounded-full ${
+            isOffline 
+              ? 'bg-rose-500 animate-pulse' 
+              : ping === null 
+                ? 'bg-yellow-500 animate-pulse' 
+                : ping < 80 
+                  ? 'bg-emerald-400' 
+                  : ping < 180 
+                    ? 'bg-amber-400' 
+                    : 'bg-rose-500 animate-pulse'
+          }`} />
+          <span>
+            {isOffline 
+              ? 'OFFLINE' 
+              : ping === null 
+                ? 'PING' 
+                : `${ping}ms`}
+          </span>
         </div>
       </div>
     </ErrorBoundary>
