@@ -324,9 +324,8 @@ const App: React.FC = () => {
 
   const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
   const [joinCode, setJoinCode] = useState('');
-  const [isEditNameModalOpen, setIsEditNameModalOpen] = useState(false);
-  const [newDisplayName, setNewDisplayName] = useState('');
-  const [isUpdatingName, setIsUpdatingName] = useState(false);
+  const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
+  const [newUsername, setNewUsername] = useState('');
   
   // Sync Firebase Profile
   const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
@@ -390,6 +389,83 @@ const App: React.FC = () => {
       clearInterval(interval);
     };
   }, [isOffline]);
+
+  const getUsernameCooldownInfo = useCallback(() => {
+    if (!profile.usernameLastChangedAt) {
+      return { canChange: true, daysLeft: 0, nextAvailableDate: null };
+    }
+    const COOLDOWN_DAYS = 60;
+    const COOLDOWN_MS = COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
+    const nextAvailable = profile.usernameLastChangedAt + COOLDOWN_MS;
+    const now = Date.now();
+    if (now >= nextAvailable) {
+      return { canChange: true, daysLeft: 0, nextAvailableDate: null };
+    }
+    const diffMs = nextAvailable - now;
+    const daysLeft = Math.ceil(diffMs / (24 * 60 * 60 * 1000));
+    return { 
+      canChange: false, 
+      daysLeft, 
+      nextAvailableDate: new Date(nextAvailable).toLocaleDateString(undefined, {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      })
+    };
+  }, [profile.usernameLastChangedAt]);
+
+  const handleSaveUsername = async () => {
+    const trimmed = newUsername.trim();
+    if (!trimmed) {
+      toast.error('Display name cannot be empty.');
+      return;
+    }
+    if (trimmed.length < 3) {
+      toast.error('Display name must be at least 3 characters.');
+      return;
+    }
+    if (trimmed.length > 16) {
+      toast.error('Display name cannot exceed 16 characters.');
+      return;
+    }
+    if (!/^[a-zA-Z0-9 _-]+$/.test(trimmed)) {
+      toast.error('Only letters, numbers, spaces, hyphens, and underscores are allowed.');
+      return;
+    }
+
+    const { canChange } = getUsernameCooldownInfo();
+    if (!canChange && profile.role !== 'admin') {
+      toast.error('Name change cooldown is active.');
+      return;
+    }
+
+    setSafeProcessing(true);
+    try {
+      const q = query(collection(db, 'users'), where('username', '==', trimmed));
+      const qSnap = await getDocs(q);
+      const duplicateExists = qSnap.docs.some(d => d.id !== auth.currentUser?.uid);
+      if (duplicateExists) {
+        toast.error('This display name is already taken.');
+        return;
+      }
+
+      const updatedProfile: UserProfile = {
+        ...profile,
+        username: trimmed,
+        usernameLastChangedAt: Date.now()
+      };
+
+      await syncProfileToCloud(updatedProfile);
+      setProfile(updatedProfile);
+      toast.success(`Display name updated to ${trimmed}!`);
+      setIsRenameModalOpen(false);
+    } catch (err: any) {
+      console.error('Failed to change username:', err);
+      toast.error('Error updating display name.');
+    } finally {
+      setSafeProcessing(false);
+    }
+  };
 
   const addFriend = async () => {
     if (!friendSearch) return;
