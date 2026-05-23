@@ -43,6 +43,7 @@ export interface UserProfile {
   activeFrame: 'none' | 'elite' | 'grandmaster' | 'thunder';
   role: 'admin' | 'user';
   friends: Friend[];
+  usernameLastChangedAt?: number;
 }
 
 export type GameMode = 'classic' | 'private' | 'join';

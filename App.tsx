@@ -324,6 +324,9 @@ const App: React.FC = () => {
 
   const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
   const [joinCode, setJoinCode] = useState('');
+  const [isEditNameModalOpen, setIsEditNameModalOpen] = useState(false);
+  const [newDisplayName, setNewDisplayName] = useState('');
+  const [isUpdatingName, setIsUpdatingName] = useState(false);
   
   // Sync Firebase Profile
   const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
@@ -1426,7 +1429,6 @@ const App: React.FC = () => {
       toast.success("500 COINS RECEIVED!", { id: toastId });
     }, 2000);
   };
-
   useEffect(() => {
     if (!gameState || view !== 'lobby') return;
     
@@ -2115,6 +2117,102 @@ const App: React.FC = () => {
                 </motion.div>
               </>
             )}
+          </AnimatePresence>
+
+          {/* Change Display Name Modal */}
+          <AnimatePresence>
+            {isRenameModalOpen && (() => {
+              const cooldownInfo = getUsernameCooldownInfo();
+              const isCooldownActive = !cooldownInfo.canChange && profile.role !== 'admin';
+              
+              return (
+                <motion.div 
+                  id="rename-modal-overlay"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="fixed inset-0 flex items-center justify-center z-[300] p-4"
+                >
+                  <motion.div 
+                    id="rename-modal-bg-dim"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    onClick={() => { if (!isProcessing) setIsRenameModalOpen(false); }}
+                    className="absolute inset-0 bg-black/80 backdrop-blur-md"
+                  />
+                  <motion.div 
+                    id="rename-modal-content"
+                    initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                    animate={{ scale: 1, opacity: 1, y: 0 }}
+                    exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                    className="relative w-full max-w-sm glass-panel p-8 rounded-[2.5rem] border-white/20 shadow-2xl z-[301] text-center mx-auto"
+                  >
+                    <h2 id="rename-modal-title" className="text-2xl font-black uppercase tracking-widest mb-1 text-indigo-400">Display Name</h2>
+                    <p id="rename-modal-subtitle" className="text-[10px] font-black text-white/20 uppercase mb-6">
+                      Update your multiplayer handle
+                    </p>
+                    
+                    {isCooldownActive ? (
+                      <div id="rename-cooldown-active" className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4 text-left mb-6 space-y-1.5">
+                        <div className="text-[9px] font-black text-amber-500 uppercase tracking-widest">cooldown active ⏳</div>
+                        <div className="text-xs font-black text-white/80">You can change your display name once every 60 days.</div>
+                        <div className="text-[10px] font-bold text-white/50 pt-2 border-t border-white/5 flex justify-between">
+                          <span>Days Remaining:</span>
+                          <span className="text-amber-400">{cooldownInfo.daysLeft} days</span>
+                        </div>
+                        <div className="text-[10px] font-bold text-white/50 flex justify-between">
+                          <span>Next Change:</span>
+                          <span className="text-amber-400">{cooldownInfo.nextAvailableDate}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div id="rename-cooldown-info" className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-4 text-[9px] font-black text-emerald-400 text-left mb-6 uppercase tracking-widest text-center">
+                        ✓ Available to change now (Once in 60 days)
+                      </div>
+                    )}
+
+                    <div className="space-y-4 text-left">
+                      <label id="rename-input-label" className="text-[8px] font-black text-white/40 uppercase tracking-widest">
+                        New Display Name
+                      </label>
+                      <input 
+                        id="rename-input-field"
+                        type="text" 
+                        maxLength={16}
+                        disabled={isCooldownActive || isProcessing}
+                        value={newUsername}
+                        onChange={(e) => setNewUsername(e.target.value)}
+                        placeholder="ElitePlayer"
+                        className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 text-lg font-bold text-center outline-none focus:border-indigo-500/50 focus:bg-white/10 transition-all text-white placeholder:text-white/10 disabled:opacity-50"
+                      />
+                      <div className="text-[8px] font-bold text-white/30 uppercase text-center mt-1">
+                        Only letters, numbers, spaces, hyphens, and underscores allowed
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-4 mt-8">
+                      <button 
+                        id="rename-cancel-btn"
+                        onClick={() => setIsRenameModalOpen(false)}
+                        disabled={isProcessing}
+                        className="py-4 rounded-2xl bg-white/5 text-[10px] font-black uppercase text-white/40 hover:bg-white/10 transition-all disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                      <button 
+                        id="rename-save-btn"
+                        onClick={handleSaveUsername}
+                        disabled={isCooldownActive || isProcessing || !newUsername.trim() || newUsername.trim() === profile.username}
+                        className="gold-button py-4 rounded-2xl text-[10px] font-black uppercase disabled:opacity-50"
+                      >
+                        {isProcessing ? 'Saving...' : 'Save Name'}
+                      </button>
+                    </div>
+                  </motion.div>
+                </motion.div>
+              );
+            })()}
           </AnimatePresence>
 
           {/* Join Table Modal */}
