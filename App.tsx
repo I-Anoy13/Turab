@@ -33,6 +33,7 @@ import { toast, Toaster } from 'sonner';
 import { auth, db } from './firebase';
 import { Card, GameState, Player, Suit, SUITS, RANKS, RANK_VALUES, UserProfile, AppView, GameMode, Friend, FriendRequest } from './types';
 import CardComponent from './components/CardComponent';
+import { Pencil, Clock } from 'lucide-react';
 
 const INITIAL_COINS = 500;
 const STAKE_AMOUNT = 200;
@@ -372,12 +373,12 @@ const App: React.FC = () => {
         });
         const end = performance.now();
         if (active) {
-          setPing(Math.round(end - start));
+          setPing(Math.min(Math.round(end - start), 677));
         }
       } catch (err) {
         const end = performance.now();
         if (active) {
-          setPing(Math.round(end - start));
+          setPing(Math.min(Math.round(end - start), 677));
         }
       }
     };
@@ -1990,7 +1991,21 @@ const App: React.FC = () => {
                     ID: {profile.gamerId || getNumericPlayerId(profile.turab_id)} 📋
                   </div>
                 </div>
-                <h2 className="text-xl font-black tracking-tight">{profile.username}</h2>
+                <div 
+                  onClick={() => {
+                    setNewUsername(profile.username);
+                    setIsRenameModalOpen(true);
+                  }}
+                  className="flex items-center gap-2 cursor-pointer mt-1 group/rename"
+                  title="Click to edit display name"
+                >
+                  <h2 className="text-xl font-black tracking-tight text-white group-hover/rename:text-indigo-400 transition-colors">
+                    {profile.username}
+                  </h2>
+                  <div className="p-1 rounded bg-white/5 group-hover/rename:bg-indigo-500/20 text-indigo-400 border border-white/5 group-hover/rename:border-indigo-500/40 transition-all flex items-center justify-center">
+                    <Pencil size={12} className="stroke-[2.5]" />
+                  </div>
+                </div>
                 <div className="flex items-center gap-3 mt-0.5">
                   <div className="text-sm font-black text-white/90">{profile.role === 'admin' ? '∞' : profile.coins.toLocaleString()} <span className="text-[10px] text-yellow-500">🪙</span></div>
                   <div className="h-0.5 w-20 bg-white/5 rounded-full overflow-hidden">
