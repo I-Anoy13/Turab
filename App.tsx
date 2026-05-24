@@ -1428,43 +1428,86 @@ const App: React.FC = () => {
   }, [turnTimeLeft, view, gameState, myPlayerId, playCard]);
 
   useEffect(() => {
-    if (!gameState || gameState.currentTrick.length !== 4 || isProcessing) return;
+    console.log("🧩 [TRICK_RESOLVE] Effect triggered:", {
+      gameStateExists: !!gameState,
+      trickLength: gameState?.currentTrick.length,
+      isProcessing,
+      isHost: gameState ? gameState.playerUids[0] === auth.currentUser?.uid : false,
+      myUid: auth.currentUser?.uid
+    });
+
+    if (!gameState || gameState.currentTrick.length !== 4 || isProcessing) {
+      console.log("🧩 [TRICK_RESOLVE] Early exit check:", {
+        skipEmpty: !gameState,
+        notFull: gameState ? gameState.currentTrick.length !== 4 : true,
+        isProcessingActive: isProcessing
+      });
+      return;
+    }
+
     const trickId = gameState.currentTrick.map(t => `${t.playerId}-${t.card.suit}-${t.card.rank}`).join('|');
-    if (resolvingTrickRef.current === trickId) return;
+    if (resolvingTrickRef.current === trickId) {
+      console.log("🧩 [TRICK_RESOLVE] Already resolving trickId:", trickId);
+      return;
+    }
     
     // Only the host resolves the trick to avoid multi-transaction overhead, 
     // but we add a safety check.
-    if (gameState.playerUids[0] !== auth.currentUser?.uid) return;
+    if (gameState.playerUids[0] !== auth.currentUser?.uid) {
+      console.log("🧩 [TRICK_RESOLVE] Client client: skipping resolution to let host resolve");
+      return;
+    }
     
+    console.log("🧩 [TRICK_RESOLVE] Initiating 400ms setTimeout for trick:", trickId);
     resolvingTrickRef.current = trickId;
     const t = setTimeout(async () => {
+      console.log("🧩 [TRICK_RESOLVE] Timeout executed. Setting safe processing...");
       setSafeProcessing(true);
       try {
         const matchRef = doc(db, 'matches', gameState.id);
+        console.log("🧩 [TRICK_RESOLVE] Starting runTransaction...");
         await runTransaction(db, async (transaction) => {
+          console.log("🧩 [TRICK_RESOLVE] Reading match document in transaction...");
           const sfDoc = await transaction.get(matchRef);
-          if (!sfDoc.exists()) return;
+          if (!sfDoc.exists()) {
+            throw new Error("Match document not found inside transaction!");
+          }
           const data = sfDoc.data() as GameState;
-          if (data.currentTrick.length !== 4) return;
+          console.log("🧩 [TRICK_RESOLVE] Transaction loaded trick length:", data.currentTrick.length);
+          if (data.currentTrick.length !== 4) {
+            throw new Error(`Aborting: Trick length has changed inside transaction to ${data.currentTrick.length}`);
+          }
 
           const winnerId = determineTrickWinner(data.currentTrick, data.leadSuit!, data.trumpSuit);
+          console.log("🧩 [TRICK_RESOLVE] Determined winnerIndex:", winnerId);
           const winTeam = (winnerId === 0 || winnerId === 2) ? [0, 2] : [1, 3];
           let players = [...data.players];
           let pile = [...data.pile, ...data.currentTrick.map(tr => tr.card)];
           let wonPile = [...data.wonPile];
           const isLast = players.every(p => p.hand.length === 0);
-          const bestCard = data.currentTrick.find(tr => tr.playerId === winnerId)!.card;
+          
+          const trickCardObj = data.currentTrick.find(tr => tr.playerId === winnerId);
+          if (!trickCardObj) {
+            console.error("🧩 [TRICK_RESOLVE] Failed to find card for winnerId:", winnerId);
+            throw new Error(`Winner card not found for player: ${winnerId}`);
+          }
+          const bestCard = trickCardObj.card;
           const isAce = bestCard.rank === 'A';
           const hasCons = players[winnerId].consecutiveWins >= 1;
           
+          console.log("🧩 [TRICK_RESOLVE] Win status:", { isLast, bestCard, isAce, hasCons, trumpSuit: data.trumpSuit });
+
           if (isLast || (hasCons && data.trumpSuit && !(hasCons && players[winnerId].lastWinWasAce && isAce))) {
+            console.log("🧩 [TRICK_RESOLVE] Condition met, updating players with score:", pile.length);
             players = players.map(p => winTeam.includes(p.id) ? { ...p, score: p.score + pile.length, consecutiveWins: 0, lastWinWasAce: false } : { ...p, consecutiveWins: 0, lastWinWasAce: false });
             wonPile = [...wonPile, ...pile];
             pile = [];
           } else {
+            console.log("🧩 [TRICK_RESOLVE] Incrementing consecutive win counters...");
             players = players.map(p => p.id === winnerId ? { ...p, consecutiveWins: p.consecutiveWins + 1, lastWinWasAce: isAce } : { ...p, consecutiveWins: 0, lastWinWasAce: false });
           }
 
+          console.log("🧩 [TRICK_RESOLVE] Applying transaction updates to doc...");
           transaction.update(matchRef, { 
             players, 
             pile, 
@@ -1478,21 +1521,26 @@ const App: React.FC = () => {
 
           // Secondary side effect for Host
           if (wonPile.length === 52 && winnerId === 0) {
+            console.log("🧩 [TRICK_RESOLVE] Match end win side-effect triggered.");
             const up = { ...profile, xp: profile.xp + 150, wins: profile.wins + 1 };
-            // syncProfileToCloud will run after transaction completes
             setProfile(up);
             syncProfileToCloud(up);
           }
         });
+        console.log("🧩 [TRICK_RESOLVE] Transaction committed successfully!");
       } catch (err) { 
-        console.error("Trick Resolve Failed:", err);
+        console.error("🧩 [TRICK_RESOLVE] Transaction Error:", err);
         // Clear ref on failure so it can retry
         resolvingTrickRef.current = "";
       } finally { 
         setSafeProcessing(false); 
+        console.log("🧩 [TRICK_RESOLVE] Released transaction block.");
       }
     }, 400);
-    return () => clearTimeout(t);
+    return () => {
+      console.log("🧩 [TRICK_RESOLVE] Cleaning up setTimeout.");
+      clearTimeout(t);
+    };
   }, [gameState, isProcessing, profile, syncProfileToCloud, determineTrickWinner]);
 
   const watchAd = () => {
