@@ -39,6 +39,33 @@ const INITIAL_COINS = 500;
 const STAKE_AMOUNT = 200;
 const APP_VERSION = '1.3.3';
 
+const TUTORIAL_PAGES = [
+  {
+    title: "Court Piece: The Grand Arena",
+    subtitle: "The Goal of the Game",
+    icon: "👑",
+    content: "Court Piece is a partnership card game for 4 players. You are paired with the player opposite to you (Players 0 & 2 vs Players 1 & 3).\n\nYour shared goal is simple: win at least 7 / 13 tricks in a round to secure victory!"
+  },
+  {
+    title: "Double Sar: Two Consecutive Wins",
+    subtitle: "The Core Mechanic of our Table",
+    icon: "⚔️",
+    content: "Unlike standard games, individual tricks won in progress are NOT immediately taken by players.\n\nThey stay piled in the center! The piled cards are only picked up when a single player wins TWO consecutive tricks in a row.\n\nThis player wins the entire 'Sar' (Center Pile) for their team!"
+  },
+  {
+    title: "Trump & The Rule of the First Streak",
+    subtitle: "Trump reveals & double wins",
+    icon: "⚡",
+    content: "• No player can win or claim the center pile BEFORE Trump is announced or revealed.\n• The trick on which the Trump is announced/revealed counts as Consecutive Win #1 for its winner!\n• If this winner manages to win the very next trick consecutively, they instantly claim the entire pile!"
+  },
+  {
+    title: "Card Rank & Following Suit",
+    subtitle: "Basic Mechanics & Flow",
+    icon: "🃏",
+    content: "• Aces are the highest card, then King, Queen, Jack, down to 2 which is lowest.\n• You MUST follow the lead suit of the trick if you have it.\n• If you don't have the lead suit, you can play a Trump card to 'ruff' and steal the trick, or play anything else to discard."
+  }
+];
+
 enum OperationType {
   CREATE = 'create',
   UPDATE = 'update',
@@ -340,6 +367,8 @@ const App: React.FC = () => {
   const callsRef = useRef<any[]>([]);
 
   const [isFriendsOpen, setIsFriendsOpen] = useState(false);
+  const [isTutorialOpen, setIsTutorialOpen] = useState(false);
+  const [tutorialPage, setTutorialPage] = useState(0);
   const [friendSearch, setFriendSearch] = useState('');
   const [isSearchingFriend, setIsSearchingFriend] = useState(false);
   const [friendsTab, setFriendsTab] = useState<'list' | 'requests'>('list');
@@ -957,8 +986,8 @@ const App: React.FC = () => {
 
   // Listen for Friend Requests
   useEffect(() => {
-    if (!auth.currentUser) return;
-    const q = query(collection(db, 'friend_requests'), where('toUid', '==', auth.currentUser.uid), where('status', '==', 'pending'));
+    if (!profile.turab_id) return;
+    const q = query(collection(db, 'friend_requests'), where('toUid', '==', profile.turab_id), where('status', '==', 'pending'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const reqs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as FriendRequest));
       setFriendRequests(reqs);
@@ -967,7 +996,7 @@ const App: React.FC = () => {
       }
     }, (err) => handleFirestoreError(err, OperationType.LIST, 'friend_requests'));
     return () => unsubscribe();
-  }, []);
+  }, [profile.turab_id]);
 
   const setupMatch = useCallback(async (code?: string, mode: 'classic' | 'private' = 'classic') => {
     // Generate a 6-digit numeric code for private matches
@@ -1240,10 +1269,10 @@ const App: React.FC = () => {
       if (snap.exists()) {
         const data = snap.data() as GameState;
         setGameState(prev => {
-          if (!prev) return data;
+          if (!prev) return null; // If user has left the game, do not restore state
           if (JSON.stringify(data) === JSON.stringify(prev)) return prev;
           
-          if (data.roundStatus === 'playing' && prev.roundStatus !== 'playing') {
+          if (data.roundStatus === 'playing' && view !== 'game') {
             setView('game');
           }
           
@@ -1307,7 +1336,7 @@ const App: React.FC = () => {
     try {
       let newTrump = currentGameState.trumpSuit;
       let newTrumpRev = currentGameState.trumpRevealedInTrick;
-      const trickIdx = currentGameState.wonPile.length / 4;
+      const trickIdx = Math.floor((currentGameState.wonPile.length + currentGameState.pile.length) / 4);
 
       if (currentGameState.leadSuit && card.suit !== currentGameState.leadSuit && currentGameState.trumpSuit === null) {
         newTrump = card.suit;
@@ -1502,7 +1531,7 @@ const App: React.FC = () => {
           const isLast = players.every(p => p.hand.length === 0);
 
           // If trump is revealed in the current trick, reset everyone's pre-trump consecutiveWins to 0
-          const currentTrickIndex = data.wonPile.length / 4;
+          const currentTrickIndex = Math.floor((data.wonPile.length + data.pile.length) / 4);
           const isTrumpRevealedThisTrick = data.trumpRevealedInTrick === currentTrickIndex;
           if (isTrumpRevealedThisTrick) {
             console.log("🧩 [TRICK_RESOLVE] Trump was revealed in this trick. Resetting all players' pre-trump consecutive wins.");
@@ -1589,7 +1618,7 @@ const App: React.FC = () => {
     }, 2000);
   };
   useEffect(() => {
-    if (!gameState || view !== 'lobby') return;
+    if (!gameState || (view !== 'lobby' && view !== 'searching')) return;
     
     const fetchNames = async () => {
       const names = { ...lobbyPlayerNames };
@@ -2120,9 +2149,14 @@ const App: React.FC = () => {
                 </motion.button>
               </div>
 
-              <motion.button whileHover={{ y: -2 }} onClick={() => setIsFriendsOpen(true)} className="glass-panel w-full py-5 rounded-2xl text-[10px] font-black uppercase border-white/10 hover:bg-white/5 transition-all">
-                Friends & Social
-              </motion.button>
+              <div className="grid grid-cols-2 gap-4">
+                <motion.button whileHover={{ y: -2 }} onClick={() => setIsFriendsOpen(true)} className="glass-panel py-5 rounded-2xl text-[10px] font-black uppercase border-white/10 hover:bg-white/5 transition-all">
+                  Friends
+                </motion.button>
+                <motion.button whileHover={{ y: -2 }} onClick={() => { setTutorialPage(0); setIsTutorialOpen(true); }} className="glass-panel py-5 rounded-2xl text-[10px] font-black uppercase border-white/10 hover:bg-white/5 transition-all text-yellow-500 hover:border-yellow-500/20">
+                  How To Play 📖
+                </motion.button>
+              </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <motion.button whileHover={{ opacity: 1 }} onClick={watchAd} className="py-4 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 text-[10px] font-black uppercase text-indigo-400/60 hover:text-indigo-400 hover:bg-indigo-600/20 transition-all">
@@ -2437,6 +2471,94 @@ const App: React.FC = () => {
                     >
                       {isProcessing ? 'Connecting...' : 'Join Now'}
                     </button>
+                  </div>
+                </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* How to Play Tutorial Modal */}
+          <AnimatePresence>
+            {isTutorialOpen && (
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 flex items-center justify-center z-[300] p-4"
+              >
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setIsTutorialOpen(false)}
+                  className="absolute inset-0 bg-black/85 backdrop-blur-md"
+                />
+                <motion.div 
+                  initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                  animate={{ scale: 1, opacity: 1, y: 0 }}
+                  exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                  className="relative w-full max-w-md glass-panel p-8 rounded-[2.5rem] border-white/20 shadow-2xl z-[301] text-left mx-auto flex flex-col"
+                >
+                  <button 
+                    onClick={() => setIsTutorialOpen(false)}
+                    className="absolute top-6 right-6 w-8 h-8 rounded-full border border-white/10 hover:border-white/30 hover:bg-white/5 flex items-center justify-center transition-all text-xs font-black text-white/45"
+                  >
+                    ✕
+                  </button>
+
+                  <div className="flex items-center gap-4 mb-4">
+                    <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-2xl">
+                      {TUTORIAL_PAGES[tutorialPage].icon}
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-black uppercase tracking-tight text-indigo-400">{TUTORIAL_PAGES[tutorialPage].title}</h2>
+                      <p className="text-[10px] font-black text-white/30 uppercase">{TUTORIAL_PAGES[tutorialPage].subtitle}</p>
+                    </div>
+                  </div>
+
+                  {/* Divider */}
+                  <div className="h-px bg-white/5 my-4" />
+
+                  {/* Body Text */}
+                  <div className="text-[12px] font-semibold text-white/70 leading-relaxed whitespace-pre-wrap min-h-[140px]">
+                    {TUTORIAL_PAGES[tutorialPage].content}
+                  </div>
+
+                  {/* Progress Indicator */}
+                  <div className="flex justify-center gap-1.5 my-6">
+                    {TUTORIAL_PAGES.map((_, i) => (
+                      <button 
+                        key={`tutorial-dot-${i}`} 
+                        onClick={() => setTutorialPage(i)}
+                        className={`h-1 rounded-full transition-all duration-300 ${i === tutorialPage ? 'w-6 bg-indigo-500' : 'w-2 bg-white/10 hover:bg-white/20'}`}
+                      />
+                    ))}
+                  </div>
+
+                  {/* Modal Footer Controls */}
+                  <div className="grid grid-cols-2 gap-4 mt-2">
+                    <button 
+                      onClick={() => setTutorialPage(prev => Math.max(0, prev - 1))}
+                      disabled={tutorialPage === 0}
+                      className="py-4 rounded-2xl bg-white/5 border border-white/10 text-[10px] font-black uppercase text-white/60 hover:bg-white/10 disabled:opacity-30 transition-all"
+                    >
+                      Back
+                    </button>
+                    {tutorialPage < TUTORIAL_PAGES.length - 1 ? (
+                      <button 
+                        onClick={() => setTutorialPage(prev => Math.min(TUTORIAL_PAGES.length - 1, prev + 1))}
+                        className="gold-button py-4 rounded-2xl text-[10px]"
+                      >
+                        Next
+                      </button>
+                    ) : (
+                      <button 
+                        onClick={() => setIsTutorialOpen(false)}
+                        className="gold-button py-4 rounded-2xl text-[10px]"
+                      >
+                        Got It!
+                      </button>
+                    )}
                   </div>
                 </motion.div>
               </motion.div>
