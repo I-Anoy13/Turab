@@ -1367,7 +1367,7 @@ const App: React.FC = () => {
         console.log(`🤖 AI playing card:`, card);
         playCard(p.id, card);
       }
-    }, 350); // 350ms offset for ultra-snappy and responsive game feel
+    }, 150); // Speed up AI to 150ms for extremely responsive and smooth gameplay transition without visual delay
     
     return () => clearTimeout(t);
   }, [gameState?.currentTurn, gameState?.roundStatus, gameState?.currentTrick?.length, isProcessing, playCard]);
@@ -1528,10 +1528,12 @@ const App: React.FC = () => {
           }
         });
         console.log("🧩 [TRICK_RESOLVE] Transaction committed successfully!");
+        // Keep the resolved trickId to avoid immediate double-trigger
+        resolvingTrickRef.current = trickId;
       } catch (err) { 
         console.error("🧩 [TRICK_RESOLVE] Transaction Error:", err);
         // Clear ref on failure so it can retry
-        resolvingTrickRef.current = "";
+        resolvingTrickRef.current = null;
       } finally { 
         setSafeProcessing(false); 
         console.log("🧩 [TRICK_RESOLVE] Released transaction block.");
@@ -1540,6 +1542,10 @@ const App: React.FC = () => {
     return () => {
       console.log("🧩 [TRICK_RESOLVE] Cleaning up setTimeout.");
       clearTimeout(t);
+      // Under any effect clean-up, if this trick wasn't resolved yet, reset the lock to allow resolution next time
+      if (resolvingTrickRef.current === trickId) {
+        resolvingTrickRef.current = null;
+      }
     };
   }, [gameState, isProcessing, profile, syncProfileToCloud, determineTrickWinner]);
 
@@ -2708,93 +2714,116 @@ const App: React.FC = () => {
           }}
           onTouchEnd={() => setHoveredCardKey(null)}
         >
-          {playerHandSorted.map((card, idx) => {
-            const cardKey = `${card.suit}-${card.rank}-${idx}`;
-            const isMyTurn = gameState.currentTurn === myPlayerId && !isProcessing && gameState.currentTrick.length < 4;
-            const isSelectable = isMyTurn && (!gameState.leadSuit || card.suit === gameState.leadSuit || !gameState.players[myPlayerId]?.hand.some(c => c.suit === gameState.leadSuit));
-            
-            // Fanning logic
+          {(() => {
             const total = playerHandSorted.length;
             const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
             
-            // Dynamic angle step to fit all cards on screen
-            // Tightened fanning (lower maxSpan, smaller angles)
-            const maxSpan = isMobile ? 28 : 45;
-            const angleStep = Math.min(isMobile ? 2.5 : 3.5, maxSpan / Math.max(total, 1)); 
-            
-            const startAngle = -((total - 1) * angleStep) / 2;
-            const angle = startAngle + idx * angleStep;
-            
-            // Adjust radius for a smooth bowl shape
-            const radius = isMobile ? 500 : 800; 
-            const x = radius * Math.sin((angle * Math.PI) / 180);
-            const y = radius - radius * Math.cos((angle * Math.PI) / 180);
-
-            const isTrump = gameState.trumpSuit === card.suit;
-            
-            // Pop-up logic: 
-            // 1. Specific card hovered (individual tracking)
-            // 2. Lead suit (gameplay focus)
-            const isCardHovered = hoveredCardKey === cardKey;
-            // Also pop the whole suit if a card of that suit is hovered (optional, user wanted individual switch)
-            // but usually you want to see the whole suit. Let's make the specific card pop MORE.
             const hoveredCardObj = hoveredCardKey ? playerHandSorted.find((_, i) => `${playerHandSorted[i].suit}-${playerHandSorted[i].rank}-${i}` === hoveredCardKey) : null;
-            const isSuitHovered = hoveredCardObj && card.suit === hoveredCardObj.suit;
-            
-            const isLeadSuitPop = isMyTurn && gameState.leadSuit && card.suit === gameState.leadSuit;
-            
-            let popupOffset = 0;
-            if (isCardHovered) {
-              popupOffset = isMobile ? -50 : -75; // Extra pop for the specific card
-            } else if (isSuitHovered || isLeadSuitPop) {
-              popupOffset = isMobile ? -30 : -45; // Normal pop for the suit/lead group
-            }
+            const isMyTurn = gameState.currentTurn === myPlayerId && !isProcessing && gameState.currentTrick.length < 4;
+            const poppedSuit = hoveredCardObj ? hoveredCardObj.suit : (isMyTurn && gameState.leadSuit ? gameState.leadSuit : null);
 
-            const handleCardPlay = (e?: React.MouseEvent) => {
-              if (e) {
+            // Calculations for wide layout on popped / active selector fanning
+            const maxSpan = isMobile ? 28 : 45;
+            const normalAngleStep = Math.min(isMobile ? 2.5 : 3.5, maxSpan / Math.max(total, 1)); 
+            
+            // Generate standard vs expanded steps for the hand
+            const expandedAngleStep = normalAngleStep * (isMobile ? 2.4 : 3.2); // SPREAD WIDER for the popped suit card selection
+            const gapAngle = isMobile ? 3.0 : 4.5; // Visual separator to make the active suit popup isolated and extremely easy to select!
+            
+            const cardSteps: number[] = [];
+            for (let i = 0; i < total; i++) {
+              if (i === 0) {
+                cardSteps.push(0);
+              } else {
+                const prevCard = playerHandSorted[i - 1];
+                const currCard = playerHandSorted[i];
+                
+                const prevIsPopped = poppedSuit && prevCard.suit === poppedSuit;
+                const currIsPopped = poppedSuit && currCard.suit === poppedSuit;
+                
+                let step = normalAngleStep;
+                if (prevIsPopped && currIsPopped) {
+                  step = expandedAngleStep;
+                } else if (prevIsPopped !== currIsPopped) {
+                  step = normalAngleStep + gapAngle;
+                }
+                cardSteps.push(step);
+              }
+            }
+            
+            const totalAngleSpan = cardSteps.reduce((sum, step) => sum + step, 0);
+            const startAngle = -totalAngleSpan / 2;
+            
+            let runningAngle = startAngle;
+            return playerHandSorted.map((card, idx) => {
+              const cardKey = `${card.suit}-${card.rank}-${idx}`;
+              const isSelectable = isMyTurn && (!gameState.leadSuit || card.suit === gameState.leadSuit || !gameState.players[myPlayerId]?.hand.some(c => c.suit === gameState.leadSuit));
+              
+              runningAngle += cardSteps[idx];
+              const angle = runningAngle;
+              
+              const radius = isMobile ? 500 : 800; 
+              const x = radius * Math.sin((angle * Math.PI) / 180);
+              const y = radius - radius * Math.cos((angle * Math.PI) / 180);
+              
+              const isTrump = gameState.trumpSuit === card.suit;
+              const isCardHovered = hoveredCardKey === cardKey;
+              const isSuitHovered = hoveredCardObj && card.suit === hoveredCardObj.suit;
+              const isLeadSuitPop = isMyTurn && gameState.leadSuit && card.suit === gameState.leadSuit;
+              
+              let popupOffset = 0;
+              if (isCardHovered) {
+                popupOffset = isMobile ? -50 : -75; // Extra pop for the specific card
+              } else if (isSuitHovered || isLeadSuitPop) {
+                popupOffset = isMobile ? -30 : -45; // Normal pop for the suit/lead group
+              }
+
+              const handleCardPlay = (e?: React.MouseEvent) => {
+                if (e) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }
+                setHoveredCardKey(null);
+                playCard(myPlayerId, card);
+              };
+
+              const handleCardPlayTouch = (e: React.TouchEvent) => {
                 e.preventDefault();
                 e.stopPropagation();
-              }
-              setHoveredCardKey(null);
-              playCard(myPlayerId, card);
-            };
+                setHoveredCardKey(null);
+                playCard(myPlayerId, card);
+              };
 
-            const handleCardPlayTouch = (e: React.TouchEvent) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setHoveredCardKey(null);
-              playCard(myPlayerId, card);
-            };
-
-            return (
-              <div 
-                key={cardKey} 
-                className="wing-card"
-                data-card-key={cardKey}
-                onMouseEnter={() => { if (!isTouchDevice) setHoveredCardKey(cardKey); }}
-                onMouseLeave={() => { if (!isTouchDevice) setHoveredCardKey(null); }}
-                onTouchStart={() => { if (isTouchDevice) setHoveredCardKey(cardKey); }}
-                style={{
-                  transform: `translate(${x}px, ${y + popupOffset}px) rotate(${angle}deg)`,
-                  zIndex: isCardHovered ? 3000 : ((isSuitHovered || isLeadSuitPop) ? 2000 : idx)
-                }}
-              >
-                <CardComponent 
-                  card={card} 
-                  skin={profile.activeSkin} 
-                  onClick={!isTouchDevice ? handleCardPlay : undefined}
-                  onTouchEnd={isTouchDevice ? handleCardPlayTouch : undefined}
-                  disabled={!isSelectable && isMyTurn} 
-                  className={`${isMobile ? "scale-[0.75]" : ""} ${isTrump ? 'ring-2 ring-indigo-400 shadow-[0_0_15px_rgba(99,102,241,0.6)]' : ''}`}
-                />
-                {isTrump && (
-                  <div className="absolute -top-1 -left-1 w-4 h-4 bg-indigo-500 rounded-full flex items-center justify-center text-[8px] shadow-lg z-10 border border-white/20">
-                    ⭐
-                  </div>
-                )}
-              </div>
-            );
-          })}
+              return (
+                <div 
+                  key={cardKey} 
+                  className="wing-card"
+                  data-card-key={cardKey}
+                  onMouseEnter={() => { if (!isTouchDevice) setHoveredCardKey(cardKey); }}
+                  onMouseLeave={() => { if (!isTouchDevice) setHoveredCardKey(null); }}
+                  onTouchStart={() => { if (isTouchDevice) setHoveredCardKey(cardKey); }}
+                  style={{
+                    transform: `translate(${x}px, ${y + popupOffset}px) rotate(${angle}deg)`,
+                    zIndex: isCardHovered ? 3000 : ((isSuitHovered || isLeadSuitPop) ? 2000 : idx)
+                  }}
+                >
+                  <CardComponent 
+                    card={card} 
+                    skin={profile.activeSkin} 
+                    onClick={!isTouchDevice ? handleCardPlay : undefined}
+                    onTouchEnd={isTouchDevice ? handleCardPlayTouch : undefined}
+                    disabled={!isSelectable && isMyTurn} 
+                    className={`${isMobile ? "scale-[0.75]" : ""} ${isTrump ? 'ring-2 ring-indigo-400 shadow-[0_0_15px_rgba(99,102,241,0.6)]' : ''}`}
+                  />
+                  {isTrump && (
+                    <div className="absolute -top-1 -left-1 w-4 h-4 bg-indigo-500 rounded-full flex items-center justify-center text-[8px] shadow-lg z-10 border border-white/20">
+                      ⭐
+                    </div>
+                  )}
+                </div>
+              );
+            });
+          })()}
         </div>
 
         {trumpAlert && (
