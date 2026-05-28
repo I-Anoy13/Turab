@@ -1500,7 +1500,15 @@ const App: React.FC = () => {
           let pile = [...data.pile, ...data.currentTrick.map(tr => tr.card)];
           let wonPile = [...data.wonPile];
           const isLast = players.every(p => p.hand.length === 0);
-          
+
+          // If trump is revealed in the current trick, reset everyone's pre-trump consecutiveWins to 0
+          const currentTrickIndex = data.wonPile.length / 4;
+          const isTrumpRevealedThisTrick = data.trumpRevealedInTrick === currentTrickIndex;
+          if (isTrumpRevealedThisTrick) {
+            console.log("🧩 [TRICK_RESOLVE] Trump was revealed in this trick. Resetting all players' pre-trump consecutive wins.");
+            players = players.map(p => ({ ...p, consecutiveWins: 0, lastWinWasAce: false }));
+          }
+
           const trickCardObj = data.currentTrick.find(tr => tr.playerId === winnerId);
           if (!trickCardObj) {
             console.error("🧩 [TRICK_RESOLVE] Failed to find card for winnerId:", winnerId);
@@ -1510,7 +1518,7 @@ const App: React.FC = () => {
           const isAce = bestCard.rank === 'A';
           const hasCons = players[winnerId].consecutiveWins >= 1;
           
-          console.log("🧩 [TRICK_RESOLVE] Win status:", { isLast, bestCard, isAce, hasCons, trumpSuit: data.trumpSuit });
+          console.log("🧩 [TRICK_RESOLVE] Win status:", { isLast, bestCard, isAce, hasCons, trumpSuit: data.trumpSuit, isTrumpRevealedThisTrick });
 
           if (isLast || (hasCons && data.trumpSuit && !(hasCons && players[winnerId].lastWinWasAce && isAce))) {
             console.log("🧩 [TRICK_RESOLVE] Condition met, updating players with score:", pile.length);
