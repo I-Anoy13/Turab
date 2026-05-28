@@ -324,6 +324,7 @@ const App: React.FC = () => {
     }
   }, []);
   const resolvingTrickRef = useRef<string | null>(null);
+  const hasProcessedEndMatchRef = useRef<string | null>(null);
   const activeTimeoutTrickIdRef = useRef<string | null>(null);
   const activeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [trumpAlert, setTrumpAlert] = useState<{ suit: Suit; playerName: string; type: 'announced' | 'challenged' } | null>(null);
@@ -998,6 +999,80 @@ const App: React.FC = () => {
     return () => unsubscribe();
   }, [profile.turab_id]);
 
+  // Post-game awards/statistics manager: Updates wins, losses, coins, XP, and Level boundaries
+  useEffect(() => {
+    if (!gameState || !gameState.id) {
+      hasProcessedEndMatchRef.current = null;
+      return;
+    }
+
+    if (gameState.roundStatus !== 'ended') {
+      hasProcessedEndMatchRef.current = null;
+      return;
+    }
+
+    if (hasProcessedEndMatchRef.current === gameState.id) {
+      return;
+    }
+
+    hasProcessedEndMatchRef.current = gameState.id;
+    console.log("🏆 [GAME_OVER] Match has ended! Processing results...");
+
+    const isMyTeamAlpha = myPlayerId === 0 || myPlayerId === 2;
+    const myTeamScore = isMyTeamAlpha 
+      ? (gameState.players[0].score + gameState.players[2].score)
+      : (gameState.players[1].score + gameState.players[3].score);
+    const opponentTeamScore = isMyTeamAlpha
+      ? (gameState.players[1].score + gameState.players[3].score)
+      : (gameState.players[0].score + gameState.players[2].score);
+
+    const isWinner = myTeamScore > opponentTeamScore;
+    const isTie = myTeamScore === opponentTeamScore;
+
+    setProfile(prev => {
+      let updatedWins = prev.wins;
+      let updatedLosses = prev.losses;
+      let coinsEarned = 0;
+      let xpEarned = 50; // Base participation XP
+
+      if (isWinner) {
+        updatedWins += 1;
+        coinsEarned = gameState.stake; // Wins the entire pot or stake!
+        xpEarned = 150; // Bonus XP for winning
+        toast.success(`VICTORY! You earned ${coinsEarned} coins & ${xpEarned} XP!`, { duration: 6000 });
+      } else if (isTie) {
+        coinsEarned = Math.floor(gameState.stake / 2); // Split stake
+        xpEarned = 80;
+        toast.info(`SPLIT TIE! Stake split: ${coinsEarned} coins returned.`, { duration: 6000 });
+      } else {
+        updatedLosses += 1;
+        xpEarned = 40;
+        toast.error(`ROUND LOST! Keep practicing. Earned ${xpEarned} XP.`, { duration: 6000 });
+      }
+
+      const nextXp = prev.xp + xpEarned;
+      const nextLevel = Math.floor(nextXp / 1000) + 1;
+      const levelUp = nextLevel > prev.level;
+
+      if (levelUp) {
+        toast.success(`🎉 LEVEL UP! You reached Level ${nextLevel}!`, { duration: 8000 });
+      }
+
+      const updatedProfile = {
+        ...prev,
+        wins: updatedWins,
+        losses: updatedLosses,
+        coins: prev.coins + coinsEarned,
+        xp: nextXp,
+        level: nextLevel
+      };
+
+      syncProfileToCloud(updatedProfile);
+      return updatedProfile;
+    });
+
+  }, [gameState?.roundStatus, gameState?.id, myPlayerId, gameState?.stake, syncProfileToCloud]);
+
   const setupMatch = useCallback(async (code?: string, mode: 'classic' | 'private' = 'classic') => {
     // Generate a 6-digit numeric code for private matches
     const numericCode = Math.floor(100000 + Math.random() * 900000).toString();
@@ -1492,7 +1567,7 @@ const App: React.FC = () => {
     }
 
     activeTimeoutTrickIdRef.current = trickId;
-    console.log("🧩 [TRICK_RESOLVE] Initiating ultra-fast 200ms timer for trick:", trickId);
+    console.log("🧩 [TRICK_RESOLVE] Initiating standard 1300ms timer for trick:", trickId);
     
     if (activeTimeoutRef.current) clearTimeout(activeTimeoutRef.current);
     
@@ -1570,14 +1645,6 @@ const App: React.FC = () => {
             roundStatus: wonPile.length === 52 ? 'ended' : 'playing', 
             updatedAt: serverTimestamp() 
           });
-
-          // Secondary side effect for Host
-          if (wonPile.length === 52 && winnerId === 0) {
-            console.log("🧩 [TRICK_RESOLVE] Match end win side-effect triggered.");
-            const up = { ...profile, xp: profile.xp + 150, wins: profile.wins + 1 };
-            setProfile(up);
-            syncProfileToCloud(up);
-          }
         });
         console.log("🧩 [TRICK_RESOLVE] Transaction committed successfully!");
         // Persist trickId mapping is complete
@@ -1591,7 +1658,7 @@ const App: React.FC = () => {
         activeTimeoutTrickIdRef.current = null;
         console.log("🧩 [TRICK_RESOLVE] Released transaction block.");
       }
-    }, 200);
+    }, 1300);
 
     return () => {
       // Clean up timeout if trick actually changes
@@ -3001,30 +3068,50 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {gameState.roundStatus === 'ended' && (
-          <div className="fixed inset-0 bg-black/95 z-[5000] flex flex-col items-center justify-center p-8 backdrop-blur-3xl text-center">
-            <div className={`text-6xl md:text-8xl font-black uppercase mb-4 tracking-tighter ${teamAlphaScore > 26 ? 'text-green-500' : 'text-red-500'}`}>
-              {teamAlphaScore > 26 ? 'ROUND WON' : 'ROUND LOST'}
-            </div>
-            <h2 className="text-2xl turab-title font-black italic mb-12 opacity-40">MATCH OVER</h2>
-            
-            <div className="glass-panel p-8 rounded-3xl border-white/10 mb-8 max-w-sm w-full">
-              <div className="flex justify-between mb-4">
-                <span className="text-white/40 font-black uppercase text-xs">Your Team</span>
-                <span className="text-2xl font-black text-green-400">{teamAlphaScore}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-white/40 font-black uppercase text-xs">Opponents</span>
-                <span className="text-2xl font-black text-red-400">{52 - teamAlphaScore}</span>
-              </div>
-            </div>
+        {gameState.roundStatus === 'ended' && (() => {
+          const isMyTeamAlpha = myPlayerId === 0 || myPlayerId === 2;
+          const myTeamScore = isMyTeamAlpha 
+            ? (gameState.players[0].score + gameState.players[2].score)
+            : (gameState.players[1].score + gameState.players[3].score);
+          const opponentTeamScore = isMyTeamAlpha
+            ? (gameState.players[1].score + gameState.players[3].score)
+            : (gameState.players[0].score + gameState.players[2].score);
+          const hasWon = myTeamScore > opponentTeamScore;
+          const isTie = myTeamScore === opponentTeamScore;
 
-            <div className="w-full max-w-sm space-y-4">
-              <button onClick={() => startNewGame('classic')} className="gold-button w-full py-6 rounded-3xl text-xl">Play Again</button>
-              <button onClick={() => setView('home')} className="w-full py-5 bg-white/5 border border-white/10 rounded-3xl text-xs font-black uppercase text-white/40">Back to Lobby</button>
+          return (
+            <div className="fixed inset-0 bg-black/95 z-[5000] flex flex-col items-center justify-center p-8 backdrop-blur-3xl text-center">
+              <div className={`text-6xl md:text-8xl font-black uppercase mb-4 tracking-tighter ${hasWon ? 'text-green-500' : isTie ? 'text-yellow-500' : 'text-red-500'}`}>
+                {hasWon ? 'ROUND WON' : isTie ? 'ROUND TIED' : 'ROUND LOST'}
+              </div>
+              <h2 className="text-2xl turab-title font-black italic mb-12 opacity-40">MATCH OVER</h2>
+              
+              <div className="glass-panel p-8 rounded-3xl border-white/10 mb-8 max-w-sm w-full">
+                <div className="flex justify-between mb-4">
+                  <span className="text-white/40 font-black uppercase text-xs">Your Team (Cards Won)</span>
+                  <span className={`text-2xl font-black ${hasWon ? 'text-green-400' : 'text-white'}`}>{myTeamScore}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-white/40 font-black uppercase text-xs">Opponents (Cards Won)</span>
+                  <span className={`text-2xl font-black ${!hasWon && !isTie ? 'text-red-400' : 'text-white'}`}>{opponentTeamScore}</span>
+                </div>
+                <div className="mt-6 text-[10px] font-black tracking-widest text-white/30 uppercase border-t border-white/5 pt-4">
+                  {hasWon 
+                    ? `🏆 WINNER: You collected ${myTeamScore} cards!` 
+                    : isTie 
+                      ? '🤝 TIE: Equal split of 26 cards each!' 
+                      : `Opponents won with ${opponentTeamScore} cards!`
+                  }
+                </div>
+              </div>
+
+              <div className="w-full max-w-sm space-y-4">
+                <button onClick={() => startNewGame('classic')} className="gold-button w-full py-6 rounded-3xl text-xl">Play Again</button>
+                <button onClick={() => setView('home')} className="w-full py-5 bg-white/5 border border-white/10 rounded-3xl text-xs font-black uppercase text-white/40">Back to Lobby</button>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
     );
   };
