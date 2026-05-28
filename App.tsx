@@ -297,6 +297,8 @@ const App: React.FC = () => {
     }
   }, []);
   const resolvingTrickRef = useRef<string | null>(null);
+  const activeTimeoutTrickIdRef = useRef<string | null>(null);
+  const activeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [trumpAlert, setTrumpAlert] = useState<{ suit: Suit; playerName: string; type: 'announced' | 'challenged' } | null>(null);
   const [isThunderActive, setIsThunderActive] = useState(false);
   const [hoveredCardKey, setHoveredCardKey] = useState<string | null>(null);
@@ -801,6 +803,11 @@ const App: React.FC = () => {
     if (!gameState) return [];
     return sortHand(gameState.players[myPlayerId]?.hand || [], gameState.trumpSuit);
   }, [gameState, myPlayerId]);
+
+  const isMyTurn = useMemo(() => {
+    if (!gameState) return false;
+    return gameState.currentTurn === myPlayerId && !isProcessing && gameState.currentTrick.length < 4;
+  }, [gameState, myPlayerId, isProcessing]);
 
   const currentTrickWinnerId = useMemo(() => {
     if (!gameState || gameState.currentTrick.length === 0) return null;
@@ -1428,43 +1435,51 @@ const App: React.FC = () => {
   }, [turnTimeLeft, view, gameState, myPlayerId, playCard]);
 
   useEffect(() => {
-    console.log("🧩 [TRICK_RESOLVE] Effect triggered:", {
-      gameStateExists: !!gameState,
-      trickLength: gameState?.currentTrick.length,
-      isProcessing,
-      isHost: gameState ? gameState.playerUids[0] === auth.currentUser?.uid : false,
-      myUid: auth.currentUser?.uid
-    });
-
-    if (!gameState || gameState.currentTrick.length !== 4 || isProcessing) {
-      console.log("🧩 [TRICK_RESOLVE] Early exit check:", {
-        skipEmpty: !gameState,
-        notFull: gameState ? gameState.currentTrick.length !== 4 : true,
-        isProcessingActive: isProcessing
-      });
+    if (!gameState || gameState.currentTrick.length !== 4) {
+      if (activeTimeoutRef.current) {
+        clearTimeout(activeTimeoutRef.current);
+        activeTimeoutRef.current = null;
+      }
+      activeTimeoutTrickIdRef.current = null;
       return;
     }
 
     const trickId = gameState.currentTrick.map(t => `${t.playerId}-${t.card.suit}-${t.card.rank}`).join('|');
+    const isHost = gameState.playerUids[0] === auth.currentUser?.uid;
+
+    if (!isHost) {
+      console.log("🧩 [TRICK_RESOLVE] Client player: skipping resolution to let host resolve");
+      return;
+    }
+
     if (resolvingTrickRef.current === trickId) {
-      console.log("🧩 [TRICK_RESOLVE] Already resolving trickId:", trickId);
+      console.log("🧩 [TRICK_RESOLVE] Already resolving or resolved trickId:", trickId);
       return;
     }
-    
-    // Only the host resolves the trick to avoid multi-transaction overhead, 
-    // but we add a safety check.
-    if (gameState.playerUids[0] !== auth.currentUser?.uid) {
-      console.log("🧩 [TRICK_RESOLVE] Client client: skipping resolution to let host resolve");
+
+    if (activeTimeoutTrickIdRef.current === trickId) {
+      // Already running the timeout for this trick, do not cancel or restart it!
       return;
     }
+
+    activeTimeoutTrickIdRef.current = trickId;
+    console.log("🧩 [TRICK_RESOLVE] Initiating ultra-fast 200ms timer for trick:", trickId);
     
-    console.log("🧩 [TRICK_RESOLVE] Initiating 400ms setTimeout for trick:", trickId);
-    resolvingTrickRef.current = trickId;
-    const t = setTimeout(async () => {
+    if (activeTimeoutRef.current) clearTimeout(activeTimeoutRef.current);
+    
+    activeTimeoutRef.current = setTimeout(async () => {
+      const currentGameState = gameStateRef.current;
+      if (!currentGameState || currentGameState.currentTrick.length !== 4) {
+        console.log("🧩 [TRICK_RESOLVE] Aborting: Trick length changed before execution.");
+        return;
+      }
+
       console.log("🧩 [TRICK_RESOLVE] Timeout executed. Setting safe processing...");
       setSafeProcessing(true);
+      resolvingTrickRef.current = trickId;
+
       try {
-        const matchRef = doc(db, 'matches', gameState.id);
+        const matchRef = doc(db, 'matches', currentGameState.id);
         console.log("🧩 [TRICK_RESOLVE] Starting runTransaction...");
         await runTransaction(db, async (transaction) => {
           console.log("🧩 [TRICK_RESOLVE] Reading match document in transaction...");
@@ -1528,26 +1543,31 @@ const App: React.FC = () => {
           }
         });
         console.log("🧩 [TRICK_RESOLVE] Transaction committed successfully!");
-        // Keep the resolved trickId to avoid immediate double-trigger
+        // Persist trickId mapping is complete
         resolvingTrickRef.current = trickId;
       } catch (err) { 
         console.error("🧩 [TRICK_RESOLVE] Transaction Error:", err);
-        // Clear ref on failure so it can retry
+        // Reset so system can retry
         resolvingTrickRef.current = null;
       } finally { 
         setSafeProcessing(false); 
+        activeTimeoutTrickIdRef.current = null;
         console.log("🧩 [TRICK_RESOLVE] Released transaction block.");
       }
-    }, 400);
+    }, 200);
+
     return () => {
-      console.log("🧩 [TRICK_RESOLVE] Cleaning up setTimeout.");
-      clearTimeout(t);
-      // Under any effect clean-up, if this trick wasn't resolved yet, reset the lock to allow resolution next time
-      if (resolvingTrickRef.current === trickId) {
-        resolvingTrickRef.current = null;
+      // Clean up timeout if trick actually changes
+      const currentGameState = gameStateRef.current;
+      if (!currentGameState || currentGameState.currentTrick.length !== 4) {
+        if (activeTimeoutRef.current) {
+          clearTimeout(activeTimeoutRef.current);
+          activeTimeoutRef.current = null;
+        }
+        activeTimeoutTrickIdRef.current = null;
       }
     };
-  }, [gameState, isProcessing, profile, syncProfileToCloud, determineTrickWinner]);
+  }, [gameState, determineTrickWinner, profile, syncProfileToCloud]);
 
   const watchAd = () => {
     const toastId = toast.loading("WATCHING AD...");
@@ -2704,22 +2724,41 @@ const App: React.FC = () => {
         <div 
           className="card-wing-container w-full max-w-[100vw]"
           onTouchMove={(e) => {
+            // Prevent scrolling on touch devices during active card choosing or dragging
+            if (e.cancelable) {
+              e.preventDefault();
+            }
             const touch = e.touches[0];
             const elem = document.elementFromPoint(touch.clientX, touch.clientY);
             const cardElem = elem?.closest('.wing-card');
             if (cardElem) {
               const key = cardElem.getAttribute('data-card-key');
               if (key) setHoveredCardKey(key);
+            } else {
+              setHoveredCardKey(null);
             }
           }}
-          onTouchEnd={() => setHoveredCardKey(null)}
+          onTouchEnd={() => {
+            if (hoveredCardKey) {
+              const part = hoveredCardKey.split('-');
+              const idxStr = part[part.length - 1];
+              const idx = parseInt(idxStr, 10);
+              const card = playerHandSorted[idx];
+              if (card) {
+                const isSelectable = isMyTurn && (!gameState.leadSuit || card.suit === gameState.leadSuit || !gameState.players[myPlayerId]?.hand.some(c => c.suit === gameState.leadSuit));
+                if (isSelectable) {
+                  playCard(myPlayerId, card);
+                }
+              }
+            }
+            setHoveredCardKey(null);
+          }}
         >
           {(() => {
             const total = playerHandSorted.length;
             const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
             
             const hoveredCardObj = hoveredCardKey ? playerHandSorted.find((_, i) => `${playerHandSorted[i].suit}-${playerHandSorted[i].rank}-${i}` === hoveredCardKey) : null;
-            const isMyTurn = gameState.currentTurn === myPlayerId && !isProcessing && gameState.currentTrick.length < 4;
             const poppedSuit = hoveredCardObj ? hoveredCardObj.suit : (isMyTurn && gameState.leadSuit ? gameState.leadSuit : null);
 
             // Calculations for wide layout on popped / active selector fanning
@@ -2787,13 +2826,6 @@ const App: React.FC = () => {
                 playCard(myPlayerId, card);
               };
 
-              const handleCardPlayTouch = (e: React.TouchEvent) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setHoveredCardKey(null);
-                playCard(myPlayerId, card);
-              };
-
               return (
                 <div 
                   key={cardKey} 
@@ -2811,7 +2843,6 @@ const App: React.FC = () => {
                     card={card} 
                     skin={profile.activeSkin} 
                     onClick={!isTouchDevice ? handleCardPlay : undefined}
-                    onTouchEnd={isTouchDevice ? handleCardPlayTouch : undefined}
                     disabled={!isSelectable && isMyTurn} 
                     className={`${isMobile ? "scale-[0.75]" : ""} ${isTrump ? 'ring-2 ring-indigo-400 shadow-[0_0_15px_rgba(99,102,241,0.6)]' : ''}`}
                   />
