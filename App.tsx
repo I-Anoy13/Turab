@@ -776,6 +776,45 @@ const App: React.FC = () => {
     }
   };
 
+  const teamupWithFriend = async (friend: Friend) => {
+    setIsFriendsOpen(false);
+    
+    try {
+      const matchId = 'MATCH-' + Math.random().toString(36).substring(7).toUpperCase();
+      toast.success(`Sending team up request to ${friend.username}...`);
+      
+      const isAdmin = profile.role === 'admin';
+      if (!isAdmin && profile.coins < STAKE_AMOUNT) {
+        return toast.error("Insufficient coins.");
+      }
+      
+      const updatedProfile = { 
+        ...profile, 
+        coins: isAdmin ? profile.coins : profile.coins - STAKE_AMOUNT, 
+        gamesPlayed: profile.gamesPlayed + 1 
+      };
+      setProfile(updatedProfile);
+      await syncProfileToCloud(updatedProfile);
+      
+      // Setup a classic match with the friend designated as the partner!
+      await setupMatch(matchId, 'classic', friend.id);
+      setView('lobby');
+      
+      await addDoc(collection(db, 'table_invitations'), {
+        fromUid: auth.currentUser!.uid,
+        fromUsername: profile.username,
+        toUid: friend.id,
+        tableCode: matchId,
+        inviteType: 'teamup', 
+        status: 'pending',
+        timestamp: serverTimestamp()
+      });
+    } catch (err) {
+      console.error("Failed to setup team up:", err);
+      toast.error("Failed to make team up invitation.");
+    }
+  };
+
   const syncProfileToCloud = useCallback(async (newProfile: UserProfile) => {
     if (!newProfile.turab_id) return;
     const path = `users/${newProfile.turab_id}`;
@@ -1183,7 +1222,7 @@ const App: React.FC = () => {
 
   }, [gameState?.roundStatus, gameState?.id, myPlayerId, gameState?.stake, syncProfileToCloud]);
 
-  const setupMatch = useCallback(async (code?: string, mode: 'classic' | 'private' = 'classic') => {
+  const setupMatch = useCallback(async (code?: string, mode: 'classic' | 'private' = 'classic', partnerUid?: string) => {
     // Generate a 6-digit numeric code for private matches
     const numericCode = Math.floor(100000 + Math.random() * 900000).toString();
     const matchId = code || (mode === 'private' ? numericCode : 'MATCH-' + Math.random().toString(36).substring(7).toUpperCase());
@@ -1207,6 +1246,7 @@ const App: React.FC = () => {
       tableCode: mode === 'private' ? matchId : undefined,
       playerUids: [auth.currentUser!.uid],
       mode,
+      partnerUid: partnerUid || null,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     };
@@ -1419,34 +1459,67 @@ const App: React.FC = () => {
         if (data.roundStatus === 'playing') return; // Already started
 
         const deck = createDeck();
-        const updatedPlayers = [...(data.players || [])];
+        const updatedPlayers: Player[] = [];
         const validUids = (data.playerUids || []).filter(uid => !!uid);
         
-        // Use placeholder names initially if we can't fetch them all inside transaction
-        // Transactions should be fast, so we don't fetch users here. 
-        // We rely on previous fetch or default names.
-        
-        validUids.forEach((uid, index) => {
-          if (index < 4) {
-            updatedPlayers[index] = { 
-              ...(updatedPlayers[index] || { id: index, score: 0, consecutiveWins: 0, lastWinWasAce: false, isAI: false }),
-              name: lobbyPlayerNames[uid] || (uid === auth.currentUser?.uid ? profile.username : 'Player'), 
-              hand: deck.slice(index * 13, (index + 1) * 13),
+        // Setup seat mapping
+        const seatMapping: Record<string, number> = {};
+        const hostUid = validUids[0];
+        const partnerUid = data.partnerUid;
+
+        if (partnerUid && validUids.includes(partnerUid)) {
+          // Teammate scenario: host is 0, partner is 2, others are 1, 3
+          if (hostUid) seatMapping[hostUid] = 0;
+          seatMapping[partnerUid] = 2;
+          
+          const opponentSeats = [1, 3];
+          let oppSeatIdx = 0;
+          validUids.forEach(uid => {
+            if (uid !== hostUid && uid !== partnerUid) {
+              const nextSeat = opponentSeats[oppSeatIdx++];
+              if (nextSeat !== undefined) {
+                seatMapping[uid] = nextSeat;
+              }
+            }
+          });
+        } else {
+          // Normal sequential assignment (no active partner)
+          validUids.forEach((uid, index) => {
+            if (index < 4) {
+              seatMapping[uid] = index;
+            }
+          });
+        }
+
+        // Populate players array based on seatMapping
+        validUids.forEach((uid) => {
+          const seatId = seatMapping[uid];
+          if (seatId !== undefined && seatId < 4) {
+            updatedPlayers[seatId] = {
+              id: seatId,
+              score: 0,
+              consecutiveWins: 0,
+              lastWinWasAce: false,
+              name: lobbyPlayerNames[uid] || (uid === auth.currentUser?.uid ? profile.username : 'Player'),
+              hand: deck.slice(seatId * 13, (seatId + 1) * 13),
               isAI: false
             };
           }
         });
 
-        for (let i = validUids.length; i < 4; i++) {
-          updatedPlayers[i] = { 
-            id: i,
-            name: i === 1 ? 'WEST_AI' : i === 2 ? 'NORTH_AI' : 'EAST_AI',
-            hand: deck.slice(i * 13, (i + 1) * 13), 
-            score: 0,
-            isAI: true,
-            consecutiveWins: 0,
-            lastWinWasAce: false
-          };
+        // Fill optional remaining empty slots as AIs
+        for (let i = 0; i < 4; i++) {
+          if (!updatedPlayers[i]) {
+            updatedPlayers[i] = {
+              id: i,
+              name: i === 1 ? 'WEST_AI' : i === 2 ? 'NORTH_AI' : 'EAST_AI',
+              hand: deck.slice(i * 13, (i + 1) * 13),
+              score: 0,
+              isAI: true,
+              consecutiveWins: 0,
+              lastWinWasAce: false
+            };
+          }
         }
 
         transaction.update(matchRef, { 
@@ -2480,11 +2553,7 @@ const App: React.FC = () => {
                                   🎮
                                 </button>
                                 <button 
-                                  onClick={() => {
-                                    toast.success(`Teamup request sent to ${friend.username}!`);
-                                    startNewGame('classic');
-                                    setIsFriendsOpen(false);
-                                  }}
+                                  onClick={() => teamupWithFriend(friend)}
                                   className="w-8 h-8 rounded-lg bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center text-xs hover:bg-emerald-600/40 transition-all"
                                   title="Teamup for Quick Match"
                                 >
@@ -2638,52 +2707,49 @@ const App: React.FC = () => {
             })()}
           </AnimatePresence>
 
-          {/* Table Invitations Popup Modal */}
+          {/* Table / Team Up Invitations Popup Banner */}
           <AnimatePresence>
             {incomingInvites.length > 0 && (
               <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 flex items-center justify-center z-[350] p-4"
+                initial={{ y: -100, opacity: 0, x: "-50%" }}
+                animate={{ y: 0, opacity: 1, x: "-50%" }}
+                exit={{ y: -100, opacity: 0, x: "-50%" }}
+                className="fixed top-6 left-1/2 -translate-x-1/2 w-full max-w-md z-[5000] px-4 pointer-events-auto"
               >
-                <div className="absolute inset-0 bg-black/85 backdrop-blur-md" />
-                <motion.div 
-                  initial={{ scale: 0.9, opacity: 0, y: 20 }}
-                  animate={{ scale: 1, opacity: 1, y: 0 }}
-                  exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                  className="relative w-full max-w-sm glass-panel p-8 rounded-[2.5rem] border-white/20 shadow-[-10px_20px_50px_rgba(0,0,0,0.8)] z-[351] text-center mx-auto"
-                >
-                  <div className="w-16 h-16 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-4xl mx-auto mb-6 animate-pulse">
-                    📡
+                <div className="glass-panel p-4 rounded-[2rem] border-2 border-indigo-500/50 shadow-[0_20px_50px_rgba(0,0,0,0.85)] bg-black/95 flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-xl shrink-0 animate-pulse">
+                      📡
+                    </div>
+                    <div className="text-left">
+                      <div className="text-[7px] font-black text-indigo-400 uppercase tracking-widest leading-none mb-1">
+                        {incomingInvites[0].inviteType === 'teamup' ? 'Team Up Invitation' : 'Arena Invitation'}
+                      </div>
+                      <div className="text-[11px] font-bold text-white uppercase leading-tight">
+                        <span className="text-indigo-400 font-extrabold">{incomingInvites[0].fromUsername}</span>
+                        {incomingInvites[0].inviteType === 'teamup' ? ' wants to team up!' : ' invited you to play!'}
+                      </div>
+                      <div className="text-[8px] font-mono font-black text-white/40 uppercase mt-0.5">
+                        Code: {incomingInvites[0].tableCode}
+                      </div>
+                    </div>
                   </div>
-                  <h2 className="text-xl font-black uppercase tracking-widest mb-2 text-indigo-400">
-                    Table Invitation
-                  </h2>
-                  <p className="text-[11px] font-bold text-white/50 uppercase mb-8">
-                    <span className="text-white font-extrabold">{incomingInvites[0].fromUsername}</span> is inviting you to join their private lobby!
-                  </p>
                   
-                  <div className="bg-white/5 rounded-2xl p-4 border border-white/10 mb-8 font-mono">
-                    <div className="text-[8px] font-black text-white/30 uppercase tracking-widest mb-1">Table Code</div>
-                    <div className="text-xl font-black text-white tracking-widest">{incomingInvites[0].tableCode}</div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="flex gap-2 shrink-0">
                     <button 
                       onClick={() => rejectInvitation(incomingInvites[0].id)}
-                      className="py-4 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 text-[10px] uppercase font-black text-white/40 tracking-widest"
+                      className="px-3 py-2 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 text-[8px] uppercase font-black text-white/50 tracking-wider transition-all"
                     >
                       Decline
                     </button>
                     <button 
                       onClick={() => acceptInvitation(incomingInvites[0])}
-                      className="gold-button py-4 rounded-xl text-[10px]"
+                      className="gold-button px-4 py-2 rounded-xl text-[8px] font-black uppercase tracking-wider"
                     >
                       Accept
                     </button>
                   </div>
-                </motion.div>
+                </div>
               </motion.div>
             )}
           </AnimatePresence>

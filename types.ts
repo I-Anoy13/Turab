@@ -76,6 +76,7 @@ export interface GameState {
   tableCode?: string;
   playerUids: string[]; // To track real human players
   mode: 'classic' | 'private';
+  partnerUid?: string | null;
   createdAt?: any;
   updatedAt?: any;
 }
