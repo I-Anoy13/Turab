@@ -375,6 +375,11 @@ const App: React.FC = () => {
   const [friendsTab, setFriendsTab] = useState<'list' | 'requests'>('list');
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
 
+  // Tactical Hand Signals & Table invitations
+  const [incomingInvites, setIncomingInvites] = useState<any[]>([]);
+  const [selectedSignal, setSelectedSignal] = useState<'slow' | 'spin' | 'slam' | null>(null);
+  const [isTacticalPanelOpen, setIsTacticalPanelOpen] = useState(false);
+
   useEffect(() => {
     const handleOnline = () => setIsOffline(false);
     const handleOffline = () => setIsOffline(true);
@@ -674,11 +679,101 @@ const App: React.FC = () => {
     setIsPeerVoiceActive(false);
   }, []);
 
-  const inviteToArena = (friend: Friend) => {
-    const code = 'INV-' + Math.random().toString(36).substring(7).toUpperCase();
-    toast.success(`Invitation sent to ${friend.username}!`);
-    startNewGame('private', code);
+  const toggleSeatSignal = async (signalType: 'trump_ace' | 'double_guard') => {
+    const currentGameState = gameStateRef.current;
+    if (!currentGameState) return;
+    
+    const matchRef = doc(db, 'matches', currentGameState.id);
+    try {
+      const isCurrentlyActive = currentGameState.players[myPlayerId]?.activeSignal === signalType;
+      const nextSignal = isCurrentlyActive ? null : signalType;
+      
+      const updatedPlayers = currentGameState.players.map(p => 
+        p.id === myPlayerId ? { ...p, activeSignal: nextSignal } : p
+      );
+      
+      await updateDoc(matchRef, {
+        players: updatedPlayers,
+        updatedAt: serverTimestamp()
+      });
+      
+      if (nextSignal) {
+        toast.info(`Signaling teammate: ${signalType === 'trump_ace' ? "I have Trump 'A'!" : "Hold on, let me win!"}`, { id: 'signal-toast' });
+        // Automatically clear after 5 seconds to keep the game clean
+        setTimeout(async () => {
+          const freshGame = gameStateRef.current;
+          if (freshGame && freshGame.players[myPlayerId]?.activeSignal === signalType) {
+            const clearedPlayers = freshGame.players.map(p => 
+              p.id === myPlayerId ? { ...p, activeSignal: null } : p
+            );
+            await updateDoc(doc(db, 'matches', freshGame.id), {
+              players: clearedPlayers
+            }).catch(() => {});
+          }
+        }, 5000);
+      }
+    } catch (err) {
+      console.error("Failed to toggle player signal:", err);
+    }
+  };
+
+  const inviteToArena = async (friend: Friend) => {
     setIsFriendsOpen(false);
+    
+    // Check if we already are in a private lobby
+    const currentGameState = gameStateRef.current;
+    if (view === 'lobby' && currentGameState?.mode === 'private' && currentGameState?.tableCode) {
+      const tCode = currentGameState.tableCode;
+      try {
+        await addDoc(collection(db, 'table_invitations'), {
+          fromUid: auth.currentUser!.uid,
+          fromUsername: profile.username,
+          toUid: friend.id,
+          tableCode: tCode,
+          status: 'pending',
+          timestamp: serverTimestamp()
+        });
+        toast.success(`Invitation sent to ${friend.username}!`);
+      } catch (err) {
+        console.error("Failed to send invite:", err);
+        toast.error("Could not send invite to friend.");
+      }
+      return;
+    }
+    
+    // Otherwise, create a new private lobby match first, and then send the invite
+    try {
+      const numericCode = Math.floor(100000 + Math.random() * 900000).toString();
+      toast.success(`Setting up Private Table and inviting ${friend.username}...`);
+      
+      const isAdmin = profile.role === 'admin';
+      if (!isAdmin && profile.coins < STAKE_AMOUNT) {
+        return toast.error("Insufficient coins.");
+      }
+      
+      const updatedProfile = { 
+        ...profile, 
+        coins: isAdmin ? profile.coins : profile.coins - STAKE_AMOUNT, 
+        gamesPlayed: profile.gamesPlayed + 1 
+      };
+      setProfile(updatedProfile);
+      await syncProfileToCloud(updatedProfile);
+      
+      await setupMatch(numericCode, 'private');
+      setView('lobby');
+      
+      await addDoc(collection(db, 'table_invitations'), {
+        fromUid: auth.currentUser!.uid,
+        fromUsername: profile.username,
+        toUid: friend.id,
+        tableCode: numericCode,
+        status: 'pending',
+        timestamp: serverTimestamp()
+      });
+    } catch (err) {
+      console.error("Failed to setup match and invite:", err);
+      toast.error("Failed to setup table invite.");
+    }
   };
 
   const syncProfileToCloud = useCallback(async (newProfile: UserProfile) => {
@@ -999,6 +1094,21 @@ const App: React.FC = () => {
     return () => unsubscribe();
   }, [profile.turab_id]);
 
+  // Listen for Table Invitations
+  useEffect(() => {
+    if (!profile.turab_id) return;
+    const q = query(
+      collection(db, 'table_invitations'), 
+      where('toUid', '==', profile.turab_id), 
+      where('status', '==', 'pending')
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const invites = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
+      setIncomingInvites(invites);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'table_invitations'));
+    return () => unsubscribe();
+  }, [profile.turab_id]);
+
   // Post-game awards/statistics manager: Updates wins, losses, coins, XP, and Level boundaries
   useEffect(() => {
     if (!gameState || !gameState.id) {
@@ -1140,6 +1250,26 @@ const App: React.FC = () => {
       setSafeProcessing(false);
       setIsJoinModalOpen(false);
       setJoinCode('');
+    }
+  };
+
+  const acceptInvitation = async (invite: any) => {
+    try {
+      // First, mark it as accepted/deleted in Firestore to prevent double prompts
+      await deleteDoc(doc(db, 'table_invitations', invite.id)).catch(() => {});
+      // Now join the table
+      await joinPrivateTable(invite.tableCode);
+    } catch (err) {
+      console.error("Accept invitation error:", err);
+    }
+  };
+
+  const rejectInvitation = async (inviteId: string) => {
+    try {
+      await deleteDoc(doc(db, 'table_invitations', inviteId)).catch(() => {});
+      toast.info("Invitation declined.");
+    } catch (err) {
+      console.error("Reject invitation error:", err);
     }
   };
 
@@ -1424,9 +1554,14 @@ const App: React.FC = () => {
           : p
       );
 
+      const armedSignal = (playerId === myPlayerId) ? selectedSignal : null;
+      if (armedSignal) {
+        setSelectedSignal(null);
+      }
+
       await updateDoc(matchRef, { 
         players: updatedPlayers, 
-        currentTrick: [...currentGameState.currentTrick, { playerId, card }], 
+        currentTrick: [...currentGameState.currentTrick, { playerId, card, signal: armedSignal }], 
         leadSuit: currentGameState.leadSuit || card.suit, 
         trumpSuit: newTrump, 
         trumpRevealedInTrick: newTrumpRev, 
@@ -1448,7 +1583,7 @@ const App: React.FC = () => {
     } finally {
       setSafeProcessing(false);
     }
-  }, [setSafeProcessing, playCardSound]);
+  }, [setSafeProcessing, playCardSound, selectedSignal, myPlayerId]);
 
   useEffect(() => {
     const currentGameState = gameState;
@@ -1861,12 +1996,12 @@ const App: React.FC = () => {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="h-[100dvh] w-full flex flex-col items-center justify-center bg-transparent p-8"
+          className="min-h-[100dvh] w-full flex flex-col items-center justify-center bg-transparent p-4 md:p-8 overflow-y-auto custom-scrollbar"
         >
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="glass-panel p-6 md:p-10 rounded-3xl md:rounded-[2.5rem] border-white/10 w-full max-w-md text-center relative overflow-hidden"
+            className="glass-panel p-6 md:p-10 rounded-3xl md:rounded-[2.5rem] border-white/10 w-full max-w-md text-center relative"
           >
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-indigo-500 to-transparent animate-shimmer"></div>
             <div className="text-[8px] font-black text-indigo-400 uppercase tracking-[0.3em] mb-2">{gameState?.mode === 'private' ? 'Private Arena' : 'Public Arena'}</div>
@@ -2322,7 +2457,7 @@ const App: React.FC = () => {
                                 <div className="text-[10px] font-black uppercase">{friend.username}</div>
                                 <div className="text-[8px] font-black text-white/40 uppercase">Level {friend.level}</div>
                               </div>
-                              <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <div className="flex gap-2 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
                                 <button 
                                   onClick={() => inviteToArena(friend)}
                                   className="w-8 h-8 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-xs hover:bg-indigo-600/40 transition-all"
@@ -2487,6 +2622,56 @@ const App: React.FC = () => {
                 </motion.div>
               );
             })()}
+          </AnimatePresence>
+
+          {/* Table Invitations Popup Modal */}
+          <AnimatePresence>
+            {incomingInvites.length > 0 && (
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 flex items-center justify-center z-[350] p-4"
+              >
+                <div className="absolute inset-0 bg-black/85 backdrop-blur-md" />
+                <motion.div 
+                  initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                  animate={{ scale: 1, opacity: 1, y: 0 }}
+                  exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                  className="relative w-full max-w-sm glass-panel p-8 rounded-[2.5rem] border-white/20 shadow-[-10px_20px_50px_rgba(0,0,0,0.8)] z-[351] text-center mx-auto"
+                >
+                  <div className="w-16 h-16 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-4xl mx-auto mb-6 animate-pulse">
+                    📡
+                  </div>
+                  <h2 className="text-xl font-black uppercase tracking-widest mb-2 text-indigo-400">
+                    Table Invitation
+                  </h2>
+                  <p className="text-[11px] font-bold text-white/50 uppercase mb-8">
+                    <span className="text-white font-extrabold">{incomingInvites[0].fromUsername}</span> is inviting you to join their private lobby!
+                  </p>
+                  
+                  <div className="bg-white/5 rounded-2xl p-4 border border-white/10 mb-8 font-mono">
+                    <div className="text-[8px] font-black text-white/30 uppercase tracking-widest mb-1">Table Code</div>
+                    <div className="text-xl font-black text-white tracking-widest">{incomingInvites[0].tableCode}</div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <button 
+                      onClick={() => rejectInvitation(incomingInvites[0].id)}
+                      className="py-4 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 text-[10px] uppercase font-black text-white/40 tracking-widest"
+                    >
+                      Decline
+                    </button>
+                    <button 
+                      onClick={() => acceptInvitation(incomingInvites[0])}
+                      className="gold-button py-4 rounded-xl text-[10px]"
+                    >
+                      Accept
+                    </button>
+                  </div>
+                </motion.div>
+              </motion.div>
+            )}
           </AnimatePresence>
 
           {/* Join Table Modal */}
@@ -2667,13 +2852,130 @@ const App: React.FC = () => {
 
         {/* Sleek central space remains clean and premium */}
 
-        <div className="absolute top-0 left-0 p-4 md:p-6 z-[150]">
+        <div className="absolute top-0 left-0 p-4 md:p-6 z-[150] flex flex-col gap-3 items-start">
           <div className="flex gap-2">
             <button onClick={() => setView('home')} className="glass-panel w-10 h-10 rounded-full flex items-center justify-center">←</button>
             <div className="glass-panel p-2 px-5 rounded-xl border-white/10">
               <div className="text-[8px] font-black text-indigo-400 uppercase">TEAM ALPHA</div>
               <div className="text-xl font-black">{teamAlphaScore}</div>
             </div>
+          </div>
+
+          {/* Collapsible Tactical Hand Signals Sidebar */}
+          <div className="relative">
+            {!isTacticalPanelOpen ? (
+              <button 
+                onClick={() => setIsTacticalPanelOpen(true)}
+                className="glass-panel w-12 h-12 rounded-2xl flex flex-col items-center justify-center border-indigo-500/20 hover:border-indigo-500/50 hover:bg-indigo-600/10 transition-all shadow-[0_0_15px_rgba(99,102,241,0.15)] animate-pulse"
+                title="Tactical Hand Signals"
+              >
+                <span className="text-sm">📡</span>
+                <span className="text-[6px] font-black tracking-widest text-indigo-400 mt-0.5 uppercase">TACTICS</span>
+              </button>
+            ) : (
+              <motion.div 
+                initial={{ x: -25, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                className="glass-panel w-[155px] md:w-[185px] p-3 rounded-2xl border-white/15 backdrop-blur-xl flex flex-col gap-2.5 shadow-2xl relative"
+              >
+                <div className="flex items-center justify-between border-b border-white/5 pb-1.5">
+                  <div>
+                    <div className="text-[8px] font-black tracking-[0.2em] text-indigo-400">SIGNS TABLE</div>
+                    <div className="text-[5.5px] font-bold text-white/30 uppercase tracking-widest leading-none mt-0.5">Tactical Play</div>
+                  </div>
+                  <button 
+                    onClick={() => setIsTacticalPanelOpen(false)}
+                    className="w-5 h-5 rounded-full border border-white/10 flex items-center justify-center text-[8px] text-white/40 hover:bg-white/5 transition-all"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Play Card signal block */}
+                <div className="space-y-1.5">
+                  <div className="text-[6px] font-black text-white/30 uppercase tracking-widest">ARM NEXT PLAY card</div>
+                  <div className="flex flex-col gap-1">
+                    <button 
+                      onClick={() => setSelectedSignal(selectedSignal === 'slow' ? null : 'slow')}
+                      className={`w-full p-2 rounded-xl border text-left transition-all ${
+                        selectedSignal === 'slow'
+                          ? 'bg-amber-500/20 border-amber-400 text-amber-200 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
+                          : 'bg-white/5 border-white/5 hover:border-white/15 hover:bg-white/10 text-white/70'
+                      }`}
+                    >
+                      <div className="text-[7.5px] font-bold flex items-center gap-1">
+                        <span>🐢</span> SLOW PLAY
+                      </div>
+                      <div className="text-[5.5px] leading-tight text-white/45 uppercase mt-0.5">I have lots of cards in this suit</div>
+                    </button>
+
+                    <button 
+                      onClick={() => setSelectedSignal(selectedSignal === 'spin' ? null : 'spin')}
+                      className={`w-full p-2 rounded-xl border text-left transition-all ${
+                        selectedSignal === 'spin'
+                          ? 'bg-indigo-500/20 border-indigo-400 text-indigo-200 shadow-[0_0_10px_rgba(99,102,241,0.2)]'
+                          : 'bg-white/5 border-white/5 hover:border-white/15 hover:bg-white/10 text-white/70'
+                      }`}
+                    >
+                      <div className="text-[7.5px] font-bold flex items-center gap-1">
+                        <span>🌀</span> SPIN CARD
+                      </div>
+                      <div className="text-[5.5px] leading-tight text-white/45 uppercase mt-0.5">Play other suit of same color next!</div>
+                    </button>
+
+                    <button 
+                      onClick={() => setSelectedSignal(selectedSignal === 'slam' ? null : 'slam')}
+                      className={`w-full p-2 rounded-xl border text-left transition-all ${
+                        selectedSignal === 'slam'
+                          ? 'bg-red-500/20 border-red-400 text-red-200 shadow-[0_0_10px_rgba(239,68,68,0.2)]'
+                          : 'bg-white/5 border-white/5 hover:border-white/15 hover:bg-white/10 text-white/70'
+                      }`}
+                    >
+                      <div className="text-[7.5px] font-bold flex items-center gap-1">
+                        <span>💥</span> SLAM PLAY
+                      </div>
+                      <div className="text-[5.5px] leading-tight text-white/45 uppercase mt-0.5">1 card left. Teammate play next!</div>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="border-t border-white/5 my-1" />
+
+                {/* Seat signal block */}
+                <div className="space-y-1.5">
+                  <div className="text-[6px] font-black text-white/30 uppercase tracking-widest">SEND INSTANT FLASH</div>
+                  <div className="flex gap-1 justify-stretch">
+                    <button 
+                      onClick={() => toggleSeatSignal('trump_ace')}
+                      className={`flex-1 p-2 rounded-xl border text-left transition-all ${
+                        gameState.players[myPlayerId]?.activeSignal === 'trump_ace'
+                          ? 'bg-yellow-500/20 border-yellow-400 text-yellow-200 shadow-[0_0_10px_rgba(234,179,8,0.2)]'
+                          : 'bg-white/5 border-white/5 hover:border-white/15 hover:bg-white/10 text-white/70'
+                      }`}
+                    >
+                      <div className="text-[7px] font-extrabold flex flex-col items-center text-center gap-0.5 leading-tight">
+                        <span className="text-xs">⭐</span>
+                        <span>I HAVE "A"</span>
+                      </div>
+                    </button>
+
+                    <button 
+                      onClick={() => toggleSeatSignal('double_guard')}
+                      className={`flex-1 p-2 rounded-xl border text-left transition-all ${
+                        gameState.players[myPlayerId]?.activeSignal === 'double_guard'
+                          ? 'bg-sky-500/20 border-sky-400 text-sky-200 shadow-[0_0_10px_rgba(14,165,233,0.2)]'
+                          : 'bg-white/5 border-white/5 hover:border-white/15 hover:bg-white/10 text-white/70'
+                      }`}
+                    >
+                      <div className="text-[7px] font-extrabold flex flex-col items-center text-center gap-0.5 leading-tight">
+                        <span className="text-xs">🛡️</span>
+                        <span>LET ME WIN</span>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
           </div>
         </div>
 
@@ -2765,13 +3067,27 @@ const App: React.FC = () => {
                   </div>
                 )}
 
-                {/* Seat Info */}
+                 {/* Seat Info */}
                 <div className={`absolute ${positions[visualSeatIdx]} z-[100] flex flex-col items-center`}>
                   <div className="relative">
+                    {p.activeSignal && (
+                      <div className={`absolute -top-12 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full text-[7px] font-black uppercase tracking-wider shadow-lg animate-bounce border flex items-center gap-1 whitespace-nowrap z-[140] ${
+                        p.activeSignal === 'trump_ace'
+                          ? 'bg-yellow-500/20 border-yellow-400 text-yellow-300 shadow-yellow-500/30'
+                          : 'bg-sky-500/20 border-sky-400 text-sky-300 shadow-sky-500/30'
+                      }`}>
+                        {p.activeSignal === 'trump_ace' ? '⭐ TRUMP "A"' : '🛡️ HOLD TURN'}
+                      </div>
+                    )}
+
                     <div className={`w-12 h-12 rounded-full glass-panel flex items-center justify-center text-xl border-2 transition-all duration-300 ${
-                      isCurrentTurn 
-                        ? 'border-indigo-400 scale-110 shadow-[0_0_20px_rgba(129,140,248,0.4)] bg-indigo-950/40' 
-                        : 'border-white/10'
+                      p.activeSignal === 'trump_ace'
+                        ? 'border-yellow-400 scale-110 shadow-[0_0_25px_#fbbf24] bg-yellow-950/40'
+                        : p.activeSignal === 'double_guard'
+                          ? 'border-sky-400 scale-110 shadow-[0_0_25px_#38bdf8] bg-sky-950/40'
+                          : isCurrentTurn 
+                            ? 'border-indigo-400 scale-110 shadow-[0_0_20px_rgba(129,140,248,0.4)] bg-indigo-950/40' 
+                            : 'border-white/10'
                     }`}>
                       {p.isAI ? '🤖' : '👤'}
                     </div>
@@ -2874,10 +3190,33 @@ const App: React.FC = () => {
               const playedByPlayer = gameState.players[t.playerId];
               const isAI = playedByPlayer?.isAI ?? true;
 
+              const hasSignal = t.signal;
+              const dealAnimationClass = hasSignal === 'slow' 
+                ? 'animate-slow-play' 
+                : hasSignal === 'spin' 
+                  ? 'animate-spin-play' 
+                  : hasSignal === 'slam' 
+                    ? 'animate-slam-play' 
+                    : 'animate-deal';
+
               return (
                 <div key={`trick-card-${t.playerId}-${t.card.suit}-${t.card.rank}-${idx}`} className={`absolute z-[50] ${offsets[visualIdx]}`}>
-                  <div className={`animate-deal ${isTrump ? 'animate-trump-play' : ''}`}>
+                  <div className={`${dealAnimationClass} ${isTrump ? 'animate-trump-play' : ''}`}>
                     <div className="relative">
+                      {/* Slam shockwave pulse overlay */}
+                      {hasSignal === 'slam' && (
+                        <div className="absolute inset-0 z-0 pointer-events-none">
+                          <div className="slam-shockwave" />
+                        </div>
+                      )}
+                      
+                      {/* Small badge to describe signal under card */}
+                      {hasSignal && (
+                        <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 bg-black/80 px-2 rounded-full text-[6.5px] font-black text-indigo-400 border border-indigo-500/20 shadow-lg tracking-wider whitespace-nowrap uppercase z-[70] flex items-center gap-0.5">
+                          {hasSignal === 'slow' ? '🐢 Slow Hand' : hasSignal === 'spin' ? '🌀 Spin' : '💥 Slam!'}
+                        </div>
+                      )}
+
                       <CardComponent 
                         card={t.card} 
                         skin={profile.activeSkin} 
@@ -2887,7 +3226,7 @@ const App: React.FC = () => {
                         {isAI ? '🤖' : '👤'}
                       </div>
                       {isWinning && (
-                        <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 bg-yellow-400 text-black text-[10px] font-black px-3 py-1 rounded-full uppercase whitespace-nowrap shadow-[0_0_15px_rgba(251,191,36,0.5)] border border-black/20 animate-pulse">
+                        <div className={`absolute left-1/2 -translate-x-1/2 bg-yellow-400 text-black text-[10px] font-black px-3 py-1 rounded-full uppercase whitespace-nowrap shadow-[0_0_15px_rgba(251,191,36,0.5)] border border-black/20 animate-pulse ${hasSignal ? '-bottom-14' : '-bottom-8'}`}>
                           Winning
                         </div>
                       )}
@@ -2959,12 +3298,16 @@ const App: React.FC = () => {
             const poppedSuit = hoveredCardObj ? hoveredCardObj.suit : (isMyTurn && gameState.leadSuit ? gameState.leadSuit : null);
 
             // Calculations for wide layout on popped / active selector fanning
-            const maxSpan = isMobile ? 28 : 45;
-            const normalAngleStep = Math.min(isMobile ? 2.5 : 3.5, maxSpan / Math.max(total, 1)); 
+            // Highly ergonomic dynamic scaling: spread widens smoothly as fewer cards remain
+            const countFactor = Math.max(1, 13 / Math.max(1, total));
+            const dynamicScale = 1 + (countFactor - 1) * 0.35; // Ergonometric spacing curve
+            
+            const maxSpan = (isMobile ? 28 : 45) * dynamicScale;
+            const normalAngleStep = Math.min((isMobile ? 2.5 : 3.5) * dynamicScale, maxSpan / Math.max(total, 1)); 
             
             // Generate standard vs expanded steps for the hand
             const expandedAngleStep = normalAngleStep * (isMobile ? 2.4 : 3.2); // SPREAD WIDER for the popped suit card selection
-            const gapAngle = isMobile ? 3.0 : 4.5; // Visual separator to make the active suit popup isolated and extremely easy to select!
+            const gapAngle = (isMobile ? 3.0 : 4.5) * dynamicScale; // Visual separator to make the active suit popup isolated and extremely easy to select!
             
             const cardSteps: number[] = [];
             for (let i = 0; i < total; i++) {

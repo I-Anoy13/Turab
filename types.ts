@@ -16,6 +16,7 @@ export interface Player {
   isAI: boolean;
   consecutiveWins: number;
   lastWinWasAce: boolean;
+  activeSignal?: 'trump_ace' | 'double_guard' | null;
 }
 
 export interface Friend {
@@ -63,7 +64,7 @@ export interface GameState {
   players: Player[];
   pile: Card[];
   wonPile: Card[];
-  currentTrick: { playerId: number; card: Card }[];
+  currentTrick: { playerId: number; card: Card; signal?: 'slow' | 'spin' | 'slam' | null }[];
   trumpSuit: Suit | null;
   trumpRevealedInTrick: number | null; // Index of the trick (wonPile.length / 4)
   currentTurn: number;

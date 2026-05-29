@@ -94,6 +94,12 @@ service cloud.firestore {
       allow delete: if isAuthenticated() && (request.auth.uid == resource.data.fromUid || request.auth.uid == resource.data.toUid);
     }
 
+    match /table_invitations/{invitationId} {
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.fromUid || request.auth.uid == resource.data.toUid);
+      allow create: if isAuthenticated() && request.resource.data.fromUid == request.auth.uid;
+      allow update, delete: if isAuthenticated() && (request.auth.uid == resource.data.fromUid || request.auth.uid == resource.data.toUid);
+    }
+
     match /matches/{matchId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated(); 
