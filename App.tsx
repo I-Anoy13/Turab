@@ -1546,6 +1546,15 @@ const App: React.FC = () => {
       if (currentGameState.leadSuit && card.suit !== currentGameState.leadSuit && currentGameState.trumpSuit === null) {
         newTrump = card.suit;
         newTrumpRev = trickIdx;
+      } else if (currentGameState.leadSuit && card.suit !== currentGameState.leadSuit && 
+                 currentGameState.trumpSuit !== null && currentGameState.trumpRevealedInTrick === trickIdx) {
+        const firstAnnouncerCard = currentGameState.currentTrick.find(t => t.card.suit !== currentGameState.leadSuit)?.card;
+        if (firstAnnouncerCard && card.suit !== firstAnnouncerCard.suit) {
+          if (card.value > firstAnnouncerCard.value) {
+            newTrump = card.suit;
+            newTrumpRev = trickIdx;
+          }
+        }
       }
 
       const updatedPlayers = currentGameState.players.map(p => 
@@ -1571,9 +1580,14 @@ const App: React.FC = () => {
 
       playCardSound();
 
-      // Trigger side effects locally if it was trump reveal
+      // Trigger side effects locally if it was trump reveal or trump shift
       if (newTrump !== currentGameState.trumpSuit) {
-        setTrumpAlert({ suit: card.suit, playerName: currentGameState.players[playerId].name, type: 'announced' });
+        const isChallenge = currentGameState.trumpSuit !== null;
+        setTrumpAlert({ 
+          suit: newTrump as Suit, 
+          playerName: currentGameState.players[playerId].name, 
+          type: isChallenge ? 'challenged' : 'announced' 
+        });
         setIsThunderActive(true);
         setTimeout(() => { setIsThunderActive(false); setTrumpAlert(null); }, 2000);
       }
@@ -1761,7 +1775,7 @@ const App: React.FC = () => {
 
           if (isLast || (hasCons && data.trumpSuit && !(hasCons && players[winnerId].lastWinWasAce && isAce))) {
             console.log("🧩 [TRICK_RESOLVE] Condition met, updating players with score:", pile.length);
-            players = players.map(p => winTeam.includes(p.id) ? { ...p, score: p.score + pile.length, consecutiveWins: 0, lastWinWasAce: false } : { ...p, consecutiveWins: 0, lastWinWasAce: false });
+            players = players.map(p => p.id === winnerId ? { ...p, score: p.score + pile.length, consecutiveWins: 0, lastWinWasAce: false } : { ...p, consecutiveWins: 0, lastWinWasAce: false });
             wonPile = [...wonPile, ...pile];
             pile = [];
           } else {
