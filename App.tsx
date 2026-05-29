@@ -698,7 +698,7 @@ const App: React.FC = () => {
       });
       
       if (nextSignal) {
-        toast.info(`Signaling teammate: ${signalType === 'trump_ace' ? "I have Trump 'A'!" : "Hold on, let me win!"}`, { id: 'signal-toast' });
+        toast.info("Sending tactical signal...", { id: 'signal-toast' });
         // Automatically clear after 5 seconds to keep the game clean
         setTimeout(async () => {
           const freshGame = gameStateRef.current;
@@ -2967,9 +2967,9 @@ const App: React.FC = () => {
                           : 'bg-white/5 border-white/5 hover:border-white/15 hover:bg-white/10 text-white/70'
                       }`}
                     >
-                      <div className="text-[7px] font-extrabold flex flex-col items-center text-center gap-0.5 leading-tight">
+                      <div className="text-[7.5px] font-extrabold flex flex-col items-center text-center gap-0.5 leading-tight">
                         <span className="text-xs">⭐</span>
-                        <span>I HAVE "A"</span>
+                        <span>YELLOW GLOW</span>
                       </div>
                     </button>
 
@@ -2981,9 +2981,9 @@ const App: React.FC = () => {
                           : 'bg-white/5 border-white/5 hover:border-white/15 hover:bg-white/10 text-white/70'
                       }`}
                     >
-                      <div className="text-[7px] font-extrabold flex flex-col items-center text-center gap-0.5 leading-tight">
+                      <div className="text-[7.5px] font-extrabold flex flex-col items-center text-center gap-0.5 leading-tight">
                         <span className="text-xs">🛡️</span>
-                        <span>LET ME WIN</span>
+                        <span>BLUE GLOW</span>
                       </div>
                     </button>
                   </div>
@@ -3085,12 +3085,12 @@ const App: React.FC = () => {
                 <div className={`absolute ${positions[visualSeatIdx]} z-[100] flex flex-col items-center`}>
                   <div className="relative">
                     {p.activeSignal && (
-                      <div className={`absolute -top-12 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full text-[7px] font-black uppercase tracking-wider shadow-lg animate-bounce border flex items-center gap-1 whitespace-nowrap z-[140] ${
+                      <div className={`absolute -top-10 left-1/2 -translate-x-1/2 w-6 h-6 rounded-full flex items-center justify-center text-[10px] shadow-lg animate-bounce border z-[140] ${
                         p.activeSignal === 'trump_ace'
                           ? 'bg-yellow-500/20 border-yellow-400 text-yellow-300 shadow-yellow-500/30'
                           : 'bg-sky-500/20 border-sky-400 text-sky-300 shadow-sky-500/30'
                       }`}>
-                        {p.activeSignal === 'trump_ace' ? '⭐ TRUMP "A"' : '🛡️ HOLD TURN'}
+                        {p.activeSignal === 'trump_ace' ? '⭐' : '🛡️'}
                       </div>
                     )}
 
