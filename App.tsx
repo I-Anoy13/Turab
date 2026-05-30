@@ -632,43 +632,6 @@ const App: React.FC = () => {
   };
 
   // Voice Chat Logic (PeerJS)
-  const initPeerVoice = useCallback(async () => {
-    if (peerRef.current) return;
-
-    const peer = new Peer(auth.currentUser!.uid);
-    peerRef.current = peer;
-
-    peer.on('call', async (call) => {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      call.answer(stream);
-      call.on('stream', (remoteStream) => {
-        const audio = new Audio();
-        audio.srcObject = remoteStream;
-        audio.play();
-      });
-      callsRef.current.push(call);
-    });
-
-    setIsPeerVoiceActive(true);
-  }, []);
-
-  const callPlayers = useCallback(async (playerUids: string[]) => {
-    if (!peerRef.current) return;
-
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    playerUids.forEach(uid => {
-      if (uid !== auth.currentUser!.uid) {
-        const call = peerRef.current!.call(uid, stream);
-        call.on('stream', (remoteStream) => {
-          const audio = new Audio();
-          audio.srcObject = remoteStream;
-          audio.play();
-        });
-        callsRef.current.push(call);
-      }
-    });
-  }, []);
-
   const cleanupPeerVoice = useCallback(() => {
     callsRef.current.forEach(call => call.close());
     callsRef.current = [];
@@ -677,6 +640,69 @@ const App: React.FC = () => {
       peerRef.current = null;
     }
     setIsPeerVoiceActive(false);
+  }, []);
+
+  const initPeerVoice = useCallback(async () => {
+    if (peerRef.current) return;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch((err) => {
+        console.warn("Browser blocked mic initial query:", err);
+        throw new Error("BLOCKED_BY_BROWSER");
+      });
+      
+      const peer = new Peer(auth.currentUser!.uid);
+      peerRef.current = peer;
+
+      peer.on('call', async (call) => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          call.answer(stream);
+          call.on('stream', (remoteStream) => {
+            const audio = new Audio();
+            audio.srcObject = remoteStream;
+            audio.play().catch(() => {});
+          });
+          callsRef.current.push(call);
+        } catch (callErr) {
+          console.warn("Answering call stream failed:", callErr);
+        }
+      });
+
+      setIsPeerVoiceActive(true);
+      toast.success("🎙️ Team voice chat active!");
+    } catch (err: any) {
+      console.warn("Peer voice activation error:", err);
+      toast.error(
+        "🎙️ Microphone blocked or denied! If you are using the app preview iframe, please click the 'Open in New Tab' button in the top-right corner of the screen to authorize the microphone.",
+        { duration: 12000, id: 'peer-mic-deny' }
+      );
+      cleanupPeerVoice();
+    }
+  }, [cleanupPeerVoice]);
+
+  const callPlayers = useCallback(async (playerUids: string[]) => {
+    if (!peerRef.current) return;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch((err) => {
+        console.warn("callPlayers getUserMedia blocked:", err);
+        throw new Error("BLOCKED_BY_BROWSER");
+      });
+      playerUids.forEach(uid => {
+        if (uid !== auth.currentUser!.uid) {
+          const call = peerRef.current!.call(uid, stream);
+          call.on('stream', (remoteStream) => {
+            const audio = new Audio();
+            audio.srcObject = remoteStream;
+            audio.play().catch(() => {});
+          });
+          callsRef.current.push(call);
+        }
+      });
+    } catch (err) {
+      console.warn("Failed to place calls to players:", err);
+    }
   }, []);
 
   const toggleSeatSignal = async (signalType: 'trump_ace' | 'double_guard') => {
@@ -699,7 +725,7 @@ const App: React.FC = () => {
       
       if (nextSignal) {
         toast.info("Sending tactical signal...", { id: 'signal-toast' });
-        // Automatically clear after 5 seconds to keep the game clean
+        // Automatically clear after 1.8 seconds to keep the game clean
         setTimeout(async () => {
           const freshGame = gameStateRef.current;
           if (freshGame && freshGame.players[myPlayerId]?.activeSignal === signalType) {
@@ -710,7 +736,7 @@ const App: React.FC = () => {
               players: clearedPlayers
             }).catch(() => {});
           }
-        }, 5000);
+        }, 1800);
       }
     } catch (err) {
       console.error("Failed to toggle player signal:", err);
@@ -1112,7 +1138,11 @@ const App: React.FC = () => {
       sessionRef.current = await sessionPromise;
       setIsMicActive(true);
     } catch (err: any) {
-      toast.error('Microphone access failed.');
+      console.warn("AI Voice connect error:", err);
+      toast.error(
+        "🎙️ Microphone blocked! If you are using the app preview iframe, please click the 'Open in New Tab' button in the top-right corner of the screen to permit microphone access.",
+        { duration: 12000, id: 'ai-mic-deny' }
+      );
       await cleanupMic();
     } finally {
       isConnectingRef.current = false;
@@ -1540,12 +1570,52 @@ const App: React.FC = () => {
     }
   }, [gameState?.id, lobbyPlayerNames, profile.username, setSafeProcessing]);
 
+  const playCardSound = useCallback(() => {
+    const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/261/261-preview.mp3');
+    audio.volume = 0.25;
+    audio.play().catch(() => {});
+  }, []);
+
+  const playSweepSound = useCallback(() => {
+    const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2019/2019-preview.mp3');
+    audio.volume = 0.3;
+    audio.play().catch(() => {});
+  }, []);
+
+  const playShuffleSound = useCallback(() => {
+    const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/730/730-preview.mp3');
+    audio.volume = 0.35;
+    audio.play().catch(() => {});
+  }, []);
+
   useEffect(() => {
     if (!gameState?.id || (view !== 'game' && view !== 'lobby' && view !== 'searching')) return;
     
     const unsubscribe = onSnapshot(doc(db, 'matches', gameState.id), (snap) => {
       if (snap.exists()) {
         const data = snap.data() as GameState;
+        
+        const prev = gameStateRef.current;
+        if (prev) {
+          const oldTrickLen = prev.currentTrick?.length || 0;
+          const newTrickLen = data.currentTrick?.length || 0;
+          const oldStatus = prev.roundStatus;
+          const newStatus = data.roundStatus;
+
+          if (newTrickLen > oldTrickLen) {
+            const lastPlay = data.currentTrick[newTrickLen - 1];
+            if (lastPlay && lastPlay.playerId !== myPlayerId) {
+              playCardSound();
+            }
+          } else if (newTrickLen === 0 && oldTrickLen >= 1) {
+            playSweepSound();
+          }
+
+          if (newStatus === 'playing' && oldStatus === 'lobby') {
+            playShuffleSound();
+          }
+        }
+
         setGameState(prev => {
           if (!prev) return null; // If user has left the game, do not restore state
           if (JSON.stringify(data) === JSON.stringify(prev)) return prev;
@@ -1567,13 +1637,7 @@ const App: React.FC = () => {
       }
     });
     return () => unsubscribe();
-  }, [gameState?.id, view, startMatchFromLobby]);
-
-  const playCardSound = useCallback(() => {
-    const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/261/261-preview.mp3');
-    audio.volume = 0.2;
-    audio.play().catch(() => {});
-  }, []);
+  }, [gameState?.id, view, startMatchFromLobby, myPlayerId, playCardSound, playSweepSound, playShuffleSound]);
 
   const determineTrickWinner = useCallback((trick: { playerId: number; card: Card }[], leadSuit: Suit, trumpSuit: Suit | null) => {
     let winId = trick[0].playerId;
