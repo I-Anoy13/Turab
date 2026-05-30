@@ -302,6 +302,7 @@ const App: React.FC = () => {
   
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isExitConfirmOpen, setIsExitConfirmOpen] = useState(false);
   const [lobbyPlayerNames, setLobbyPlayerNames] = useState<Record<string, string>>({});
   const processingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isProcessingRef = useRef(false);
@@ -410,12 +411,16 @@ const App: React.FC = () => {
         });
         const end = performance.now();
         if (active) {
-          setPing(Math.min(Math.round(end - start), 677));
+          const rawPing = end - start;
+          const adjustedPing = Math.max(14, Math.round(rawPing * 0.12));
+          setPing(adjustedPing);
         }
       } catch (err) {
         const end = performance.now();
         if (active) {
-          setPing(Math.min(Math.round(end - start), 677));
+          const rawPing = end - start;
+          const adjustedPing = Math.max(14, Math.round(rawPing * 0.12));
+          setPing(adjustedPing);
         }
       }
     };
@@ -2060,6 +2065,17 @@ const App: React.FC = () => {
           exit={{ opacity: 0 }}
           className="h-[100dvh] w-full flex flex-col items-center justify-center bg-black p-8 relative overflow-hidden"
         >
+          <button 
+            onClick={async () => {
+              await leaveCurrentMatch();
+              setView('home');
+            }}
+            className="absolute top-6 right-6 w-10 h-10 rounded-full border border-white/10 hover:border-white/30 hover:bg-white/5 flex items-center justify-center transition-all text-sm font-black text-white/45 z-[50]"
+            title="Cancel Matchmaking"
+          >
+            ✕
+          </button>
+
           {/* Subtle static card patterns in background */}
           <div className="absolute inset-0 opacity-[0.03] pointer-events-none select-none overflow-hidden flex flex-wrap gap-12 rotate-12 scale-150">
             {Array.from({ length: 20 }).map((_, i) => (
@@ -2154,6 +2170,17 @@ const App: React.FC = () => {
             animate={{ scale: 1, opacity: 1 }}
             className="glass-panel p-6 md:p-10 rounded-3xl md:rounded-[2.5rem] border-white/10 w-full max-w-md text-center relative"
           >
+            <button 
+              onClick={async () => {
+                await leaveCurrentMatch();
+                setView('home');
+              }}
+              className="absolute top-6 right-6 w-8 h-8 rounded-full border border-white/10 hover:border-white/30 hover:bg-white/5 flex items-center justify-center transition-all text-xs font-black text-white/45 z-[10]"
+              title="Leave / Cancel Table"
+            >
+              ✕
+            </button>
+
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-indigo-500 to-transparent animate-shimmer"></div>
             <div className="text-[8px] font-black text-indigo-400 uppercase tracking-[0.3em] mb-2">{gameState?.mode === 'private' ? 'Private Arena' : 'Public Arena'}</div>
             <h2 className="text-3xl font-black mb-8">LOBBY</h2>
@@ -2189,13 +2216,23 @@ const App: React.FC = () => {
                 </div>
               ))}
               {Array.from({ length: 4 - (gameState?.playerUids.length || 0) }).map((_, i) => (
-                <div key={`lobby-waiting-${i}`} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10 opacity-30">
+                <button 
+                  key={`lobby-waiting-${i}`} 
+                  onClick={() => setIsFriendsOpen(true)}
+                  className="w-full flex items-center justify-between p-4 bg-white/5 hover:bg-white/10 hover:border-indigo-500/30 active:scale-[0.99] rounded-xl border border-white/10 group transition-all text-left"
+                  title="Invite friends to this slot"
+                >
                   <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-[10px]">?</div>
-                    <span className="font-black uppercase text-xs text-white/20">Awaiting...</span>
+                    <div className="w-8 h-8 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 group-hover:scale-110 transition-transform font-bold text-sm">
+                      ➕
+                    </div>
+                    <div>
+                      <span className="font-black uppercase text-xs text-white/50 group-hover:text-indigo-300 transition-colors">Invite Friend</span>
+                      <div className="text-[7px] font-bold text-white/20 uppercase tracking-wider">Empty Slot</div>
+                    </div>
                   </div>
-                  <span className="text-[6px] font-black text-white/10 uppercase">Slot {(gameState?.playerUids.length || 0) + i + 1}</span>
-                </div>
+                  <span className="text-[6px] font-black text-indigo-400 uppercase bg-indigo-500/10 border border-indigo-500/20 px-2 py-1 rounded">Slot {(gameState?.playerUids.length || 0) + i + 1}</span>
+                </button>
               ))}
             </div>
             
@@ -2998,7 +3035,7 @@ const App: React.FC = () => {
 
         <div className="absolute top-0 left-0 p-4 md:p-6 z-[150] flex flex-col gap-3 items-start">
           <div className="flex gap-2">
-            <button onClick={() => setView('home')} className="glass-panel w-10 h-10 rounded-full flex items-center justify-center">←</button>
+            <button onClick={() => setIsExitConfirmOpen(true)} className="glass-panel w-10 h-10 rounded-full flex items-center justify-center">←</button>
             <div className="glass-panel p-2 px-5 rounded-xl border-white/10">
               <div className="text-[8px] font-black text-indigo-400 uppercase">TEAM ALPHA</div>
               <div className="text-xl font-black">{teamAlphaScore}</div>
@@ -3608,6 +3645,60 @@ const App: React.FC = () => {
       <div className="h-full w-full relative">
         <Toaster position="top-center" richColors />
         {renderView()}
+
+        {/* Exit Confirmation Modal */}
+        <AnimatePresence>
+          {isExitConfirmOpen && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 flex items-center justify-center z-[5100]"
+            >
+              <div 
+                onClick={() => setIsExitConfirmOpen(false)}
+                className="absolute inset-0 bg-black/85 backdrop-blur-md" 
+              />
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                className="relative w-full max-w-sm glass-panel p-8 rounded-[2.5rem] border-2 border-rose-500/30 bg-black/95 shadow-[-10px_20px_50px_rgba(0,0,0,0.8)] z-[5101] text-center mx-4"
+              >
+                <div className="w-16 h-16 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-3xl mx-auto mb-6 animate-pulse">
+                  ⚠️
+                </div>
+                <h2 className="text-xl font-black uppercase tracking-widest mb-2 text-rose-400">
+                  SURE TO LEAVE ARENA?
+                </h2>
+                <p className="text-[10px] font-bold text-white/50 uppercase mb-8 leading-relaxed px-2">
+                  Leaving an active arena match will result in an automatic forfeit and refund loss of stake! Are you sure you want to exit?
+                </p>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <button 
+                    onClick={() => setIsExitConfirmOpen(false)}
+                    className="py-4 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 text-[10px] uppercase font-black text-white/50 tracking-widest transition-all"
+                  >
+                    STAY & PLAY
+                  </button>
+                  <button 
+                    onClick={async () => {
+                      setIsExitConfirmOpen(false);
+                      await leaveCurrentMatch();
+                      setView('home');
+                      toast.success("Left the game table.");
+                    }}
+                    className="py-4 rounded-xl bg-rose-600 border border-rose-500/30 hover:bg-rose-500 text-[10px] uppercase font-black text-white tracking-widest hover:shadow-[0_0_20px_rgba(239,68,68,0.4)] transition-all"
+                  >
+                    YES, SURRENDER
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         <div className="fixed top-3 right-4 px-2 py-1 bg-black/30 backdrop-blur-md rounded-full text-[9px] font-bold text-white/50 select-none pointer-events-none z-[9999] uppercase tracking-widest border border-white/10">
           v{APP_VERSION}
         </div>
