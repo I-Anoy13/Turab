@@ -433,6 +433,21 @@ const App: React.FC = () => {
     };
   }, [isOffline]);
 
+  // Intercept browser back button or hardware back swipe
+  useEffect(() => {
+    if (view === 'game' || view === 'lobby') {
+      window.history.pushState(null, '', window.location.href);
+      const handlePopState = (e: PopStateEvent) => {
+        window.history.pushState(null, '', window.location.href);
+        setIsExitConfirmOpen(true);
+      };
+      window.addEventListener('popstate', handlePopState);
+      return () => {
+        window.removeEventListener('popstate', handlePopState);
+      };
+    }
+  }, [view]);
+
   const getUsernameCooldownInfo = useCallback(() => {
     if (!profile.usernameLastChangedAt) {
       return { canChange: true, daysLeft: 0, nextAvailableDate: null };
@@ -2559,159 +2574,6 @@ const App: React.FC = () => {
             </div>
           </motion.div>
 
-          {/* Friends Drawer */}
-          <AnimatePresence>
-            {isFriendsOpen && (
-              <>
-                <motion.div 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  onClick={() => setIsFriendsOpen(false)}
-                  className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200]"
-                />
-                <motion.div 
-                  initial={{ x: '100%' }}
-                  animate={{ x: 0 }}
-                  exit={{ x: '100%' }}
-                  transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-                  className="fixed top-0 right-0 h-full w-full max-w-sm glass-panel border-l border-white/10 z-[201] p-8 flex flex-col"
-                >
-                  <div className="flex items-center justify-between mb-8">
-                    <h2 className="text-2xl font-black uppercase tracking-widest text-indigo-400">Social</h2>
-                    <button onClick={() => setIsFriendsOpen(false)} className="text-white/40 hover:text-white transition-colors">✕</button>
-                  </div>
-
-                  <div className="flex gap-4 mb-8">
-                    <button 
-                      onClick={() => setFriendsTab('list')}
-                      className={`flex-1 py-3 rounded-xl text-[8px] font-black uppercase tracking-widest transition-all ${friendsTab === 'list' ? 'bg-indigo-600 text-white' : 'bg-white/5 text-white/40'}`}
-                    >
-                      Friends
-                    </button>
-                    <button 
-                      onClick={() => setFriendsTab('requests')}
-                      className={`flex-1 py-3 rounded-xl text-[8px] font-black uppercase tracking-widest transition-all relative ${friendsTab === 'requests' ? 'bg-indigo-600 text-white' : 'bg-white/5 text-white/40'}`}
-                    >
-                      Requests
-                      {friendRequests.length > 0 && (
-                        <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[8px] rounded-full flex items-center justify-center animate-pulse">
-                          {friendRequests.length}
-                        </span>
-                      )}
-                    </button>
-                  </div>
-
-                  {friendsTab === 'list' ? (
-                    <>
-                      <div className="space-y-4 mb-8">
-                        <div className="relative">
-                          <input 
-                            type="text" 
-                            value={friendSearch}
-                            onChange={e => setFriendSearch(e.target.value)}
-                            placeholder="SEARCH BY USERNAME" 
-                            className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-[10px] font-black outline-none focus:border-indigo-500/50 transition-all uppercase placeholder:text-white/20" 
-                          />
-                          <button 
-                            onClick={addFriend}
-                            disabled={isSearchingFriend || !friendSearch}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-[8px] font-black uppercase transition-all disabled:opacity-50"
-                          >
-                            {isSearchingFriend ? '...' : 'Add'}
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-                        {profile.friends.length === 0 ? (
-                          <div className="h-full flex flex-col items-center justify-center text-center opacity-20">
-                            <div className="text-4xl mb-4">👥</div>
-                            <p className="text-[10px] font-black uppercase tracking-widest">No friends yet.<br/>Start building your crew!</p>
-                          </div>
-                        ) : (
-                          profile.friends.map((friend, idx) => (
-                            <motion.div 
-                              key={`friend-${friend.id}-${idx}`}
-                              initial={{ x: 20, opacity: 0 }}
-                              animate={{ x: 0, opacity: 1 }}
-                              className="glass-panel p-4 rounded-2xl border-white/5 flex items-center gap-4 group"
-                            >
-                              <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-lg relative">
-                                👤
-                                <div className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-[#0a0f1e] ${friend.status === 'online' ? 'bg-green-500' : friend.status === 'in-game' ? 'bg-purple-500' : 'bg-gray-500'}`}></div>
-                              </div>
-                              <div className="flex-1">
-                                <div className="text-[10px] font-black uppercase">{friend.username}</div>
-                                <div className="text-[8px] font-black text-white/40 uppercase">Level {friend.level}</div>
-                              </div>
-                              <div className="flex gap-2 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
-                                <button 
-                                  onClick={() => inviteToArena(friend)}
-                                  className="w-8 h-8 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-xs hover:bg-indigo-600/40 transition-all"
-                                  title="Invite to Arena"
-                                >
-                                  🎮
-                                </button>
-                                <button 
-                                  onClick={() => teamupWithFriend(friend)}
-                                  className="w-8 h-8 rounded-lg bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center text-xs hover:bg-emerald-600/40 transition-all"
-                                  title="Teamup for Quick Match"
-                                >
-                                  🤝
-                                </button>
-                              </div>
-                            </motion.div>
-                          ))
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-                      {friendRequests.length === 0 ? (
-                        <div className="h-full flex flex-col items-center justify-center text-center opacity-20">
-                          <div className="text-4xl mb-4">📩</div>
-                          <p className="text-[10px] font-black uppercase tracking-widest">No pending requests.</p>
-                        </div>
-                      ) : (
-                        friendRequests.map((req, idx) => (
-                          <motion.div 
-                            key={`req-${req.id}-${idx}`}
-                            initial={{ x: 20, opacity: 0 }}
-                            animate={{ x: 0, opacity: 1 }}
-                            className="glass-panel p-4 rounded-2xl border-white/5 flex items-center gap-4"
-                          >
-                            <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-lg">
-                              👤
-                            </div>
-                            <div className="flex-1">
-                              <div className="text-[10px] font-black uppercase">{req.fromUsername}</div>
-                              <div className="text-[8px] font-black text-white/40 uppercase">Wants to be friends</div>
-                            </div>
-                            <div className="flex gap-2">
-                              <button 
-                                onClick={() => acceptRequest(req)}
-                                className="w-8 h-8 rounded-lg bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center text-[8px] hover:bg-emerald-600/40 transition-all"
-                              >
-                                ✓
-                              </button>
-                              <button 
-                                onClick={() => rejectRequest(req.id)}
-                                className="w-8 h-8 rounded-lg bg-red-600/20 border border-red-500/30 flex items-center justify-center text-[8px] hover:bg-red-600/40 transition-all"
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          </motion.div>
-                        ))
-                      )}
-                    </div>
-                  )}
-                </motion.div>
-              </>
-            )}
-          </AnimatePresence>
-
           {/* Change Display Name Modal */}
           <AnimatePresence>
             {isRenameModalOpen && (() => {
@@ -2741,6 +2603,14 @@ const App: React.FC = () => {
                     exit={{ scale: 0.9, opacity: 0, y: 20 }}
                     className="relative w-full max-w-sm glass-panel p-8 rounded-[2.5rem] border-white/20 shadow-2xl z-[301] text-center mx-auto"
                   >
+                    <button 
+                      onClick={() => setIsRenameModalOpen(false)}
+                      disabled={isProcessing}
+                      className="absolute top-6 right-6 w-8 h-8 rounded-full border border-white/10 hover:border-white/30 hover:bg-white/5 flex items-center justify-center transition-all text-xs font-black text-white/45 z-10"
+                      title="Close"
+                    >
+                      ✕
+                    </button>
                     <h2 id="rename-modal-title" className="text-2xl font-black uppercase tracking-widest mb-1 text-indigo-400">Display Name</h2>
                     <p id="rename-modal-subtitle" className="text-[10px] font-black text-white/20 uppercase mb-6">
                       Update your multiplayer handle
@@ -2877,7 +2747,14 @@ const App: React.FC = () => {
                     exit={{ scale: 0.9, opacity: 0, y: 20 }}
                     className="relative w-full max-w-sm glass-panel p-8 rounded-[2.5rem] border-white/20 shadow-2xl z-[301] text-center mx-auto"
                   >
-                  <h2 className="text-2xl font-black uppercase tracking-widest mb-2 text-indigo-400">Join Table</h2>
+                    <button 
+                      onClick={() => setIsJoinModalOpen(false)}
+                      className="absolute top-6 right-6 w-8 h-8 rounded-full border border-white/10 hover:border-white/30 hover:bg-white/5 flex items-center justify-center transition-all text-xs font-black text-white/45 z-10"
+                      title="Close"
+                    >
+                      ✕
+                    </button>
+                    <h2 className="text-2xl font-black uppercase tracking-widest mb-2 text-indigo-400">Join Table</h2>
                   <p className="text-[10px] font-black text-white/20 uppercase mb-8">Enter the secret table code</p>
                   
                   <input 
@@ -3645,6 +3522,159 @@ const App: React.FC = () => {
       <div className="h-full w-full relative">
         <Toaster position="top-center" richColors />
         {renderView()}
+
+        {/* Global Friends Drawer */}
+        <AnimatePresence>
+          {isFriendsOpen && (
+            <>
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setIsFriendsOpen(false)}
+                className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[5200]"
+              />
+              <motion.div 
+                initial={{ x: '100%' }}
+                animate={{ x: 0 }}
+                exit={{ x: '100%' }}
+                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                className="fixed top-0 right-0 h-full w-full max-w-sm glass-panel border-l border-white/10 z-[5201] p-8 flex flex-col"
+              >
+                <div className="flex items-center justify-between mb-8">
+                  <h2 className="text-2xl font-black uppercase tracking-widest text-indigo-400">Social</h2>
+                  <button onClick={() => setIsFriendsOpen(false)} className="text-white/40 hover:text-white transition-colors">✕</button>
+                </div>
+
+                <div className="flex gap-4 mb-8">
+                  <button 
+                    onClick={() => setFriendsTab('list')}
+                    className={`flex-1 py-3 rounded-xl text-[8px] font-black uppercase tracking-widest transition-all ${friendsTab === 'list' ? 'bg-indigo-600 text-white' : 'bg-white/5 text-white/40'}`}
+                  >
+                    Friends
+                  </button>
+                  <button 
+                    onClick={() => setFriendsTab('requests')}
+                    className={`flex-1 py-3 rounded-xl text-[8px] font-black uppercase tracking-widest transition-all relative ${friendsTab === 'requests' ? 'bg-indigo-600 text-white' : 'bg-white/5 text-white/40'}`}
+                  >
+                    Requests
+                    {friendRequests.length > 0 && (
+                      <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[8px] rounded-full flex items-center justify-center animate-pulse">
+                        {friendRequests.length}
+                      </span>
+                    )}
+                  </button>
+                </div>
+
+                {friendsTab === 'list' ? (
+                  <>
+                    <div className="space-y-4 mb-8">
+                      <div className="relative">
+                        <input 
+                          type="text" 
+                          value={friendSearch}
+                          onChange={e => setFriendSearch(e.target.value)}
+                          placeholder="SEARCH BY USERNAME" 
+                          className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-[10px] font-black outline-none focus:border-indigo-500/50 transition-all uppercase placeholder:text-white/20" 
+                        />
+                        <button 
+                          onClick={addFriend}
+                          disabled={isSearchingFriend || !friendSearch}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-[8px] font-black uppercase transition-all disabled:opacity-50"
+                        >
+                          {isSearchingFriend ? '...' : 'Add'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
+                      {profile.friends.length === 0 ? (
+                        <div className="h-full flex flex-col items-center justify-center text-center opacity-20">
+                          <div className="text-4xl mb-4">👥</div>
+                          <p className="text-[10px] font-black uppercase tracking-widest">No friends yet.<br/>Start building your crew!</p>
+                        </div>
+                      ) : (
+                        profile.friends.map((friend, idx) => (
+                          <motion.div 
+                            key={`friend-${friend.id}-${idx}`}
+                            initial={{ x: 20, opacity: 0 }}
+                            animate={{ x: 0, opacity: 1 }}
+                            className="glass-panel p-4 rounded-2xl border-white/5 flex items-center gap-4 group"
+                          >
+                            <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-lg relative">
+                              👤
+                              <div className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-[#0a0f1e] ${friend.status === 'online' ? 'bg-green-500' : friend.status === 'in-game' ? 'bg-purple-500' : 'bg-gray-500'}`}></div>
+                            </div>
+                            <div className="flex-1">
+                              <div className="text-[10px] font-black uppercase">{friend.username}</div>
+                              <div className="text-[8px] font-black text-white/40 uppercase">Level {friend.level}</div>
+                            </div>
+                            <div className="flex gap-2 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
+                              <button 
+                                onClick={() => inviteToArena(friend)}
+                                className="w-8 h-8 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-xs hover:bg-indigo-600/40 transition-all"
+                                title="Invite to Arena"
+                              >
+                                🎮
+                              </button>
+                              <button 
+                                onClick={() => teamupWithFriend(friend)}
+                                className="w-8 h-8 rounded-lg bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center text-xs hover:bg-emerald-600/40 transition-all"
+                                title="Teamup for Quick Match"
+                              >
+                                🤝
+                              </button>
+                            </div>
+                          </motion.div>
+                        ))
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
+                    {friendRequests.length === 0 ? (
+                      <div className="h-full flex flex-col items-center justify-center text-center opacity-20">
+                        <div className="text-4xl mb-4">📩</div>
+                        <p className="text-[10px] font-black uppercase tracking-widest">No pending requests.</p>
+                      </div>
+                    ) : (
+                      friendRequests.map((req, idx) => (
+                        <motion.div 
+                          key={`req-${req.id}-${idx}`}
+                          initial={{ x: 20, opacity: 0 }}
+                          animate={{ x: 0, opacity: 1 }}
+                          className="glass-panel p-4 rounded-2xl border-white/5 flex items-center gap-4"
+                        >
+                          <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-lg">
+                            👤
+                          </div>
+                          <div className="flex-1">
+                            <div className="text-[10px] font-black uppercase">{req.fromUsername}</div>
+                            <div className="text-[8px] font-black text-white/40 uppercase">Wants to be friends</div>
+                          </div>
+                          <div className="flex gap-2">
+                            <button 
+                              onClick={() => acceptRequest(req)}
+                              className="w-8 h-8 rounded-lg bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center text-[8px] hover:bg-emerald-600/40 transition-all"
+                            >
+                              ✓
+                            </button>
+                            <button 
+                              onClick={() => rejectRequest(req.id)}
+                              className="w-8 h-8 rounded-lg bg-red-600/20 border border-red-500/30 flex items-center justify-center text-[8px] hover:bg-red-600/40 transition-all"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </motion.div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
 
         {/* Exit Confirmation Modal */}
         <AnimatePresence>
