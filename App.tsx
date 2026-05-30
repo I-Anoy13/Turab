@@ -770,20 +770,19 @@ const App: React.FC = () => {
     const currentGameState = gameStateRef.current;
     if (view === 'lobby' && currentGameState?.mode === 'private' && currentGameState?.tableCode) {
       const tCode = currentGameState.tableCode;
-      try {
-        await addDoc(collection(db, 'table_invitations'), {
-          fromUid: auth.currentUser!.uid,
-          fromUsername: profile.username,
-          toUid: friend.id,
-          tableCode: tCode,
-          status: 'pending',
-          timestamp: serverTimestamp()
-        });
-        toast.success(`Invitation sent to ${friend.username}!`);
-      } catch (err) {
-        console.error("Failed to send invite:", err);
-        toast.error("Could not send invite to friend.");
-      }
+      toast.success(`Invitation sent to ${friend.username}!`);
+      
+      // Fire-and-forget invitation write in the background
+      addDoc(collection(db, 'table_invitations'), {
+        fromUid: auth.currentUser!.uid,
+        fromUsername: profile.username,
+        toUid: friend.id,
+        tableCode: tCode,
+        status: 'pending',
+        timestamp: serverTimestamp()
+      }).catch(err => {
+        console.error("Failed to send background invitation:", err);
+      });
       return;
     }
     
@@ -803,19 +802,28 @@ const App: React.FC = () => {
         gamesPlayed: profile.gamesPlayed + 1 
       };
       setProfile(updatedProfile);
-      await syncProfileToCloud(updatedProfile);
       
-      await setupMatch(numericCode, 'private');
+      // OPTIMISTIC: Open lobby and set local state immediately
       setView('lobby');
       
-      await addDoc(collection(db, 'table_invitations'), {
-        fromUid: auth.currentUser!.uid,
-        fromUsername: profile.username,
-        toUid: friend.id,
-        tableCode: numericCode,
-        status: 'pending',
-        timestamp: serverTimestamp()
-      });
+      // Initialize match and cloud invitation in background
+      (async () => {
+        try {
+          await syncProfileToCloud(updatedProfile);
+          await setupMatch(numericCode, 'private');
+          
+          await addDoc(collection(db, 'table_invitations'), {
+            fromUid: auth.currentUser!.uid,
+            fromUsername: profile.username,
+            toUid: friend.id,
+            tableCode: numericCode,
+            status: 'pending',
+            timestamp: serverTimestamp()
+          });
+        } catch (err) {
+          console.error("Backround table/invite creation error:", err);
+        }
+      })();
     } catch (err) {
       console.error("Failed to setup match and invite:", err);
       toast.error("Failed to setup table invite.");
@@ -840,21 +848,29 @@ const App: React.FC = () => {
         gamesPlayed: profile.gamesPlayed + 1 
       };
       setProfile(updatedProfile);
-      await syncProfileToCloud(updatedProfile);
       
-      // Setup a classic match with the friend designated as the partner!
-      await setupMatch(matchId, 'classic', friend.id);
+      // OPTIMISTIC: Transition to lobby instantly
       setView('lobby');
       
-      await addDoc(collection(db, 'table_invitations'), {
-        fromUid: auth.currentUser!.uid,
-        fromUsername: profile.username,
-        toUid: friend.id,
-        tableCode: matchId,
-        inviteType: 'teamup', 
-        status: 'pending',
-        timestamp: serverTimestamp()
-      });
+      // Execute setups in parallel / background
+      (async () => {
+        try {
+          await syncProfileToCloud(updatedProfile);
+          await setupMatch(matchId, 'classic', friend.id);
+          
+          await addDoc(collection(db, 'table_invitations'), {
+            fromUid: auth.currentUser!.uid,
+            fromUsername: profile.username,
+            toUid: friend.id,
+            tableCode: matchId,
+            inviteType: 'teamup', 
+            status: 'pending',
+            timestamp: serverTimestamp()
+          });
+        } catch (err) {
+          console.error("Background team up setup error:", err);
+        }
+      })();
     } catch (err) {
       console.error("Failed to setup team up:", err);
       toast.error("Failed to make team up invitation.");
@@ -1370,32 +1386,37 @@ const App: React.FC = () => {
     if (!currentUid) return;
 
     console.log(`🚪 [LEAVE_MATCH] Leaving match: ${matchId}`);
-    try {
-      const matchRef = doc(db, 'matches', matchId);
-      await runTransaction(db, async (transaction) => {
-        const snap = await transaction.get(matchRef);
-        if (!snap.exists()) return;
-        const data = snap.data() as GameState;
-        
-        if (data.roundStatus === 'lobby') {
-          const remainingUids = data.playerUids.filter(uid => uid !== currentUid);
-          if (remainingUids.length === 0) {
-            transaction.delete(matchRef);
-            console.log(`🗑 Match ${matchId} deleted from Cloud Storage - empty.`);
-          } else {
-            transaction.update(matchRef, {
-              playerUids: remainingUids,
-              updatedAt: serverTimestamp()
-            });
-            console.log(`👥 Match ${matchId} membership updated. Remaining:`, remainingUids);
+    
+    // Clear state IMMEDIATELY for responsive/instant UI reaction
+    setGameState(null);
+
+    // Fire-and-forget transaction in background
+    (async () => {
+      try {
+        const matchRef = doc(db, 'matches', matchId);
+        await runTransaction(db, async (transaction) => {
+          const snap = await transaction.get(matchRef);
+          if (!snap.exists()) return;
+          const data = snap.data() as GameState;
+          
+          if (data.roundStatus === 'lobby') {
+            const remainingUids = data.playerUids.filter(uid => uid !== currentUid);
+            if (remainingUids.length === 0) {
+              transaction.delete(matchRef);
+              console.log(`🗑 Match ${matchId} deleted from Cloud Storage - empty.`);
+            } else {
+              transaction.update(matchRef, {
+                playerUids: remainingUids,
+                updatedAt: serverTimestamp()
+              });
+              console.log(`👥 Match ${matchId} membership updated. Remaining:`, remainingUids);
+            }
           }
-        }
-      });
-    } catch (err) {
-      console.warn("Failed to clean up match membership on leave:", err);
-    } finally {
-      setGameState(null);
-    }
+        });
+      } catch (err) {
+        console.warn("Failed to clean up match membership on leave in background:", err);
+      }
+    })();
   }, [gameState?.id]);
 
   const startNewGame = useCallback(async (mode: GameMode, code?: string) => {
@@ -1405,7 +1426,11 @@ const App: React.FC = () => {
     console.log(`🎮 Initializing ${mode} game...`);
     const updatedProfile = { ...profile, coins: isAdmin ? profile.coins : profile.coins - STAKE_AMOUNT, gamesPlayed: profile.gamesPlayed + 1 };
     setProfile(updatedProfile);
-    await syncProfileToCloud(updatedProfile);
+    
+    // Sync profile to cloud in background to guarantee instant UI transition
+    syncProfileToCloud(updatedProfile).catch(err => {
+      console.warn("Background profile sync failed:", err);
+    });
     
     if (mode === 'classic') {
       setView('searching');
@@ -1485,8 +1510,11 @@ const App: React.FC = () => {
         setView('home');
       }
     } else {
-      await setupMatch(undefined, 'private');
+      // For private tables, transition the view instantly & initialize lobby synchronously
       setView('lobby');
+      setupMatch(undefined, 'private').catch(err => {
+        console.error("Private match setup failed:", err);
+      });
     }
   }, [profile, setupMatch, syncProfileToCloud]);
 
