@@ -375,6 +375,7 @@ const App: React.FC = () => {
   const [isSearchingFriend, setIsSearchingFriend] = useState(false);
   const [friendsTab, setFriendsTab] = useState<'list' | 'requests'>('list');
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
 
   // Tactical Hand Signals & Table invitations
   const [incomingInvites, setIncomingInvites] = useState<any[]>([]);
@@ -671,7 +672,18 @@ const App: React.FC = () => {
         throw new Error("BLOCKED_BY_BROWSER");
       });
       
-      const peer = new Peer(auth.currentUser!.uid);
+      const peer = new Peer(auth.currentUser!.uid, {
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' }
+          ]
+        },
+        debug: 1
+      });
       peerRef.current = peer;
 
       peer.on('call', async (call) => {
@@ -724,6 +736,38 @@ const App: React.FC = () => {
       console.warn("Failed to place calls to players:", err);
     }
   }, []);
+
+  const sendInGameMessage = async (messageText: string) => {
+    const currentGameState = gameStateRef.current;
+    if (!currentGameState) return;
+
+    try {
+      const matchRef = doc(db, 'matches', currentGameState.id);
+      const updatedPlayers = currentGameState.players.map(p => 
+        p.id === myPlayerId ? { ...p, activeChat: messageText } : p
+      );
+      
+      await updateDoc(matchRef, {
+        players: updatedPlayers,
+        updatedAt: serverTimestamp()
+      });
+
+      // Clear after 3 seconds
+      setTimeout(async () => {
+        const freshGame = gameStateRef.current;
+        if (freshGame && freshGame.players[myPlayerId]?.activeChat === messageText) {
+          const clearedPlayers = freshGame.players.map(p => 
+            p.id === myPlayerId ? { ...p, activeChat: null } : p
+          );
+          await updateDoc(doc(db, 'matches', freshGame.id), {
+            players: clearedPlayers
+          }).catch(() => {});
+        }
+      }, 3000);
+    } catch (err) {
+      console.error("Failed to send in-game chat message:", err);
+    }
+  };
 
   const toggleSeatSignal = async (signalType: 'trump_ace' | 'double_guard') => {
     const currentGameState = gameStateRef.current;
@@ -947,6 +991,7 @@ const App: React.FC = () => {
               });
             }
             setView('home');
+            setIsAuthLoading(false);
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             if (errMsg.toLowerCase().includes('offline') && retryCount < maxRetries) {
@@ -960,6 +1005,7 @@ const App: React.FC = () => {
               if (retryCount >= maxRetries) {
                 setView('home'); // Try to let them play with local profile
               }
+              setIsAuthLoading(false);
             }
           }
         };
@@ -967,6 +1013,7 @@ const App: React.FC = () => {
         fetchProfile();
       } else {
         setView('login');
+        setIsAuthLoading(false);
       }
     });
     return () => unsubscribe();
@@ -1326,9 +1373,7 @@ const App: React.FC = () => {
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, `matches/${matchId}`);
     }
-    
-    initPeerVoice();
-  }, [profile.username, initPeerVoice, handleFirestoreError]);
+  }, [profile.username, handleFirestoreError]);
 
   const joinPrivateTable = async (code: string) => {
     const cleanCode = code.replace(/[^0-9]/g, '');
@@ -2946,123 +2991,6 @@ const App: React.FC = () => {
               <div className="text-xl font-black">{teamAlphaScore}</div>
             </div>
           </div>
-
-          {/* Collapsible Tactical Hand Signals Sidebar */}
-          <div className="relative">
-            {!isTacticalPanelOpen ? (
-              <button 
-                onClick={() => setIsTacticalPanelOpen(true)}
-                className="glass-panel w-12 h-12 rounded-2xl flex flex-col items-center justify-center border-indigo-500/20 hover:border-indigo-500/50 hover:bg-indigo-600/10 transition-all shadow-[0_0_15px_rgba(99,102,241,0.15)] animate-pulse"
-                title="Tactical Hand Signals"
-              >
-                <span className="text-sm">📡</span>
-                <span className="text-[6px] font-black tracking-widest text-indigo-400 mt-0.5 uppercase">TACTICS</span>
-              </button>
-            ) : (
-              <motion.div 
-                initial={{ x: -25, opacity: 0 }}
-                animate={{ x: 0, opacity: 1 }}
-                className="glass-panel w-[155px] md:w-[185px] p-3 rounded-2xl border-white/15 backdrop-blur-xl flex flex-col gap-2.5 shadow-2xl relative"
-              >
-                <div className="flex items-center justify-between border-b border-white/5 pb-1.5">
-                  <div>
-                    <div className="text-[8px] font-black tracking-[0.2em] text-indigo-400">SIGNS TABLE</div>
-                    <div className="text-[5.5px] font-bold text-white/30 uppercase tracking-widest leading-none mt-0.5">Tactical Play</div>
-                  </div>
-                  <button 
-                    onClick={() => setIsTacticalPanelOpen(false)}
-                    className="w-5 h-5 rounded-full border border-white/10 flex items-center justify-center text-[8px] text-white/40 hover:bg-white/5 transition-all"
-                  >
-                    ✕
-                  </button>
-                </div>
-
-                {/* Play Card signal block */}
-                <div className="space-y-1.5">
-                  <div className="text-[6px] font-black text-white/30 uppercase tracking-widest">ARM NEXT PLAY card</div>
-                  <div className="flex flex-col gap-1">
-                    <button 
-                      onClick={() => setSelectedSignal(selectedSignal === 'slow' ? null : 'slow')}
-                      className={`w-full p-2 rounded-xl border text-left transition-all ${
-                        selectedSignal === 'slow'
-                          ? 'bg-amber-500/20 border-amber-400 text-amber-200 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
-                          : 'bg-white/5 border-white/5 hover:border-white/15 hover:bg-white/10 text-white/70'
-                      }`}
-                    >
-                      <div className="text-[7.5px] font-bold flex items-center gap-1">
-                        <span>🐢</span> SLOW PLAY
-                      </div>
-                      <div className="text-[5.5px] leading-tight text-white/45 uppercase mt-0.5">I have lots of cards in this suit</div>
-                    </button>
-
-                    <button 
-                      onClick={() => setSelectedSignal(selectedSignal === 'spin' ? null : 'spin')}
-                      className={`w-full p-2 rounded-xl border text-left transition-all ${
-                        selectedSignal === 'spin'
-                          ? 'bg-indigo-500/20 border-indigo-400 text-indigo-200 shadow-[0_0_10px_rgba(99,102,241,0.2)]'
-                          : 'bg-white/5 border-white/5 hover:border-white/15 hover:bg-white/10 text-white/70'
-                      }`}
-                    >
-                      <div className="text-[7.5px] font-bold flex items-center gap-1">
-                        <span>🌀</span> SPIN CARD
-                      </div>
-                      <div className="text-[5.5px] leading-tight text-white/45 uppercase mt-0.5">Play other suit of same color next!</div>
-                    </button>
-
-                    <button 
-                      onClick={() => setSelectedSignal(selectedSignal === 'slam' ? null : 'slam')}
-                      className={`w-full p-2 rounded-xl border text-left transition-all ${
-                        selectedSignal === 'slam'
-                          ? 'bg-red-500/20 border-red-400 text-red-200 shadow-[0_0_10px_rgba(239,68,68,0.2)]'
-                          : 'bg-white/5 border-white/5 hover:border-white/15 hover:bg-white/10 text-white/70'
-                      }`}
-                    >
-                      <div className="text-[7.5px] font-bold flex items-center gap-1">
-                        <span>💥</span> SLAM PLAY
-                      </div>
-                      <div className="text-[5.5px] leading-tight text-white/45 uppercase mt-0.5">1 card left. Teammate play next!</div>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="border-t border-white/5 my-1" />
-
-                {/* Seat signal block */}
-                <div className="space-y-1.5">
-                  <div className="text-[6px] font-black text-white/30 uppercase tracking-widest">SEND INSTANT FLASH</div>
-                  <div className="flex gap-1 justify-stretch">
-                    <button 
-                      onClick={() => toggleSeatSignal('trump_ace')}
-                      className={`flex-1 p-2 rounded-xl border text-left transition-all ${
-                        gameState.players[myPlayerId]?.activeSignal === 'trump_ace'
-                          ? 'bg-yellow-500/20 border-yellow-400 text-yellow-200 shadow-[0_0_10px_rgba(234,179,8,0.2)]'
-                          : 'bg-white/5 border-white/5 hover:border-white/15 hover:bg-white/10 text-white/70'
-                      }`}
-                    >
-                      <div className="text-[7.5px] font-extrabold flex flex-col items-center text-center gap-0.5 leading-tight">
-                        <span className="text-xs">⭐</span>
-                        <span>YELLOW GLOW</span>
-                      </div>
-                    </button>
-
-                    <button 
-                      onClick={() => toggleSeatSignal('double_guard')}
-                      className={`flex-1 p-2 rounded-xl border text-left transition-all ${
-                        gameState.players[myPlayerId]?.activeSignal === 'double_guard'
-                          ? 'bg-sky-500/20 border-sky-400 text-sky-200 shadow-[0_0_10px_rgba(14,165,233,0.2)]'
-                          : 'bg-white/5 border-white/5 hover:border-white/15 hover:bg-white/10 text-white/70'
-                      }`}
-                    >
-                      <div className="text-[7.5px] font-extrabold flex flex-col items-center text-center gap-0.5 leading-tight">
-                        <span className="text-xs">🛡️</span>
-                        <span>BLUE GLOW</span>
-                      </div>
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </div>
         </div>
 
         <div className="absolute top-0 right-0 p-4 md:p-6 z-[150] flex gap-2">
@@ -3156,6 +3084,17 @@ const App: React.FC = () => {
                  {/* Seat Info */}
                 <div className={`absolute ${positions[visualSeatIdx]} z-[100] flex flex-col items-center`}>
                   <div className="relative">
+                    {p.activeChat && (
+                      <motion.div 
+                        initial={{ scale: 0, opacity: 0, y: 15 }}
+                        animate={{ scale: 1, opacity: 1, y: 0 }}
+                        className="absolute bottom-16 left-1/2 -translate-x-1/2 z-[500] bg-indigo-950/95 border border-indigo-400/40 text-[9px] font-black uppercase text-white px-3 py-1.5 rounded-2xl shadow-[0_4px_20px_rgba(99,102,241,0.4)] whitespace-nowrap flex items-center gap-1.5 bg-gradient-to-tb from-indigo-950 to-[#0e143c]"
+                      >
+                        <div className="absolute bottom-[-5px] left-1/2 -translate-x-1/2 w-2 h-2 bg-[#0e143c] border-r border-b border-indigo-400/40 transform rotate-45" />
+                        <span className="text-[11px]">💬</span> {p.activeChat}
+                      </motion.div>
+                    )}
+
                     {p.activeSignal && (
                       <div className={`absolute -top-10 left-1/2 -translate-x-1/2 w-6 h-6 rounded-full flex items-center justify-center text-[10px] shadow-lg animate-bounce border z-[140] ${
                         p.activeSignal === 'trump_ace'
@@ -3483,6 +3422,121 @@ const App: React.FC = () => {
           })()}
         </div>
 
+        {/* Modern Comms & Tactics Dock - Bottom Right */}
+        <div className="absolute bottom-6 right-6 z-[450] flex flex-col gap-2.5 items-end">
+          <AnimatePresence>
+            {isTacticalPanelOpen && (
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0, y: 15 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.9, opacity: 0, y: 15 }}
+                className="glass-panel w-[280px] p-4 rounded-[2rem] border-white/10 backdrop-blur-2xl flex flex-col gap-3 shadow-2xl relative border border-indigo-500/20"
+              >
+                <div className="flex items-center justify-between border-b border-indigo-500/10 pb-2">
+                  <div>
+                    <div className="text-[9px] font-black text-transparent bg-clip-text bg-gradient-to-r from-indigo-300 to-amber-300 uppercase tracking-widest">TACTICS & COMMS</div>
+                    <div className="text-[6px] font-black text-white/30 uppercase mt-0.5">Coordinated Team Play</div>
+                  </div>
+                  <button 
+                    onClick={() => setIsTacticalPanelOpen(false)}
+                    className="w-5 h-5 rounded-full border border-white/10 hover:bg-white/5 text-[8px] flex items-center justify-center font-bold text-white/50"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Seat Glowing Signals */}
+                <div className="space-y-1">
+                  <span className="text-[6px] font-black text-indigo-400/80 uppercase tracking-wider block">GLOW TABLE SIGNALS</span>
+                  <div className="grid grid-cols-2 gap-1.5 font-sans">
+                    <button 
+                      onClick={() => toggleSeatSignal('trump_ace')}
+                      className={`p-1.5 rounded-xl border text-center transition-all ${
+                        gameState.players[myPlayerId]?.activeSignal === 'trump_ace'
+                          ? 'bg-amber-500/20 border-amber-400 text-amber-200 shadow-lg'
+                          : 'bg-white/5 border-white/5 hover:border-white/15 hover:bg-white/10 text-white/70'
+                      }`}
+                    >
+                      <div className="text-[7.5px] font-black">⭐ YELLOW GLOW</div>
+                    </button>
+                    <button 
+                      onClick={() => toggleSeatSignal('double_guard')}
+                      className={`p-1.5 rounded-xl border text-center transition-all ${
+                        gameState.players[myPlayerId]?.activeSignal === 'double_guard'
+                          ? 'bg-sky-500/20 border-sky-400 text-sky-200 shadow-lg'
+                          : 'bg-white/5 border-white/5 hover:border-white/15 hover:bg-white/10 text-white/70'
+                      }`}
+                    >
+                      <div className="text-[7.5px] font-black">🛡️ BLUE GLOW</div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Card Play Arming */}
+                <div className="space-y-1">
+                  <span className="text-[6px] font-black text-indigo-400/80 uppercase tracking-wider block">ARM PLAY SIGNS</span>
+                  <div className="grid grid-cols-3 gap-1 font-sans">
+                    <button 
+                      onClick={() => setSelectedSignal(selectedSignal === 'slow' ? null : 'slow')}
+                      className={`py-1 rounded-lg border text-center transition-all ${
+                        selectedSignal === 'slow'
+                          ? 'bg-amber-500/25 border-amber-400 text-amber-200 font-black'
+                          : 'bg-white/5 border-white/5 hover:border-white/10 text-white/60 text-[7px]'
+                      }`}
+                    >
+                      <div className="text-[6.5px]">🐢 SLOW</div>
+                    </button>
+                    <button 
+                      onClick={() => setSelectedSignal(selectedSignal === 'spin' ? null : 'spin')}
+                      className={`py-1 rounded-lg border text-center transition-all ${
+                        selectedSignal === 'spin'
+                          ? 'bg-indigo-500/25 border-indigo-400 text-indigo-200 font-black'
+                          : 'bg-white/5 border-white/5 hover:border-white/10 text-white/60 text-[7px]'
+                      }`}
+                    >
+                      <div className="text-[6.5px]">🌀 SPIN</div>
+                    </button>
+                    <button 
+                      onClick={() => setSelectedSignal(selectedSignal === 'slam' ? null : 'slam')}
+                      className={`py-1 rounded-lg border text-center transition-all ${
+                        selectedSignal === 'slam'
+                          ? 'bg-red-500/25 border-red-400 text-red-200 font-black'
+                          : 'bg-white/5 border-white/5 hover:border-white/10 text-white/60 text-[7px]'
+                      }`}
+                    >
+                      <div className="text-[6.5px]">💥 SLAM</div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Quick Chat Comms */}
+                <div className="space-y-1">
+                  <span className="text-[6px] font-black text-indigo-400/80 uppercase tracking-wider block">TALK COMMS (MESSAGES)</span>
+                  <div className="grid grid-cols-2 gap-1 max-h-[85px] overflow-y-auto custom-scrollbar pr-1 font-sans">
+                    {["Nice play partner! 👏", "Watch the trump! ⚠️", "I got this round! 😎", "Ouch, bad cards... 😢", "Win this! 🔥", "My bad! 🙏"].map((msg, idx) => (
+                      <button 
+                        key={`chat-opt-${idx}`}
+                        onClick={() => sendInGameMessage(msg)}
+                        className="p-1 px-1.5 rounded-lg bg-white/5 hover:bg-indigo-500/10 border border-white/5 hover:border-indigo-500/20 text-left text-white/70 text-[7.5px] font-bold leading-tight transition-all truncate"
+                      >
+                        {msg}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <button 
+            onClick={() => setIsTacticalPanelOpen(!isTacticalPanelOpen)}
+            className="w-12 h-12 rounded-full glass-panel flex flex-col items-center justify-center border-indigo-500/30 hover:border-indigo-500/60 hover:bg-indigo-600/10 transition-all shadow-[0_4px_25px_rgba(99,102,241,0.25)] relative"
+          >
+            <span className="text-lg animate-pulse">📢</span>
+            <span className="text-[6.5px] font-black text-indigo-400 uppercase leading-none tracking-widest mt-0.5">COMMS</span>
+          </button>
+        </div>
+
         {trumpAlert && (
           <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[2000] pointer-events-none">
             <div className="glass-panel p-4 px-8 rounded-3xl border-2 border-indigo-500/50 flex items-center gap-4 shadow-2xl animate-bounce">
@@ -3549,7 +3603,43 @@ const App: React.FC = () => {
     <ErrorBoundary>
       <div className="h-full w-full relative">
         <Toaster position="top-center" richColors />
-        {renderView()}
+        {isAuthLoading ? (
+          <div className="fixed inset-0 bg-[#060814] z-[9999] flex flex-col items-center justify-center p-8 text-center select-none overflow-hidden">
+            {/* Ambient gold glow */}
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[350px] h-[350px] bg-indigo-500/10 rounded-full blur-[100px]" />
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[250px] h-[250px] bg-amber-500/5 rounded-full blur-[80px]" />
+            
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ duration: 0.5, ease: 'easeOut' }}
+              className="relative z-10 flex flex-col items-center gap-4"
+            >
+              {/* Premium Logo Frame */}
+              <div className="relative w-24 h-24 rounded-3xl border-2 border-amber-500/40 bg-white/5 flex items-center justify-center shadow-[0_0_50px_rgba(245,158,11,0.15)] mb-2 overflow-hidden">
+                <div className="absolute inset-0 bg-gradient-to-tr from-indigo-500/20 via-transparent to-amber-500/20 animate-pulse" />
+                <span className="text-4xl filter drop-shadow-[0_0_10px_rgba(245,158,11,0.5)]">👑</span>
+              </div>
+
+              <h1 className="text-3xl font-black uppercase tracking-[0.4em] text-transparent bg-clip-text bg-gradient-to-r from-amber-200 via-yellow-400 to-amber-200 drop-shadow-[0_2px_15px_rgba(245,158,11,0.2)]">
+                TURAB
+              </h1>
+              <span className="text-[9px] font-black tracking-[0.3em] text-indigo-400 uppercase leading-none">
+                ELITE CARD SERIES
+              </span>
+
+              {/* Progress Bar / Spinner */}
+              <div className="mt-8 flex flex-col items-center gap-2">
+                <div className="w-12 h-12 rounded-full border-2 border-indigo-500/10 border-t-amber-400 border-r-amber-400/50 animate-spin" />
+                <span className="text-[7.5px] font-black uppercase text-white/30 tracking-[0.25em] animate-pulse">
+                  ESTABLISHING SECURE DECK...
+                </span>
+              </div>
+            </motion.div>
+          </div>
+        ) : (
+          renderView()
+        )}
 
         {/* Global Friends Drawer */}
         <AnimatePresence>

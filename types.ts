@@ -17,6 +17,7 @@ export interface Player {
   consecutiveWins: number;
   lastWinWasAce: boolean;
   activeSignal?: 'trump_ace' | 'double_guard' | null;
+  activeChat?: string | null;
 }
 
 export interface Friend {
