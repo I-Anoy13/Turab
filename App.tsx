@@ -26,7 +26,8 @@ import {
   arrayUnion,
   getDocFromServer,
   runTransaction,
-  limit
+  limit,
+  orderBy
 } from 'firebase/firestore';
 import { Peer } from 'peerjs';
 import { toast, Toaster } from 'sonner';
@@ -528,6 +529,12 @@ const App: React.FC = () => {
   const [incomingInvites, setIncomingInvites] = useState<any[]>([]);
   const [selectedSignal, setSelectedSignal] = useState<'slow' | 'spin' | 'slam' | null>(null);
   const [isTacticalPanelOpen, setIsTacticalPanelOpen] = useState(false);
+  const [trumpAceUsedCount, setTrumpAceUsedCount] = useState(0);
+  const [doubleGuardUsedCount, setDoubleGuardUsedCount] = useState(0);
+  const [typedMessage, setTypedMessage] = useState('');
+  const [activeChatFriend, setActiveChatFriend] = useState<Friend | null>(null);
+  const [friendMessages, setFriendMessages] = useState<any[]>([]);
+  const [typedFriendMessage, setTypedFriendMessage] = useState('');
 
   useEffect(() => {
     const handleOnline = () => setIsOffline(false);
@@ -539,6 +546,65 @@ const App: React.FC = () => {
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
+
+  // Reset tactical signal usage limits for a new round
+  useEffect(() => {
+    if (gameState?.roundStatus === 'playing') {
+      setTrumpAceUsedCount(0);
+      setDoubleGuardUsedCount(0);
+    }
+  }, [gameState?.id, gameState?.roundStatus]);
+
+  // Deterministic chat ID based on user and friend UIDs
+  const getChatId = useCallback((friendId: string) => {
+    if (!auth.currentUser?.uid) return '';
+    return [auth.currentUser.uid, friendId].sort().join('_');
+  }, []);
+
+  // Listen to private messages between friends in real-time
+  useEffect(() => {
+    if (!activeChatFriend || !auth.currentUser?.uid) {
+      setFriendMessages([]);
+      return;
+    }
+    
+    const chatId = getChatId(activeChatFriend.id);
+    const msgsRef = collection(db, 'chats', chatId, 'messages');
+    const q = query(msgsRef, orderBy('timestamp', 'asc'), limit(50));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const msgs: any[] = [];
+      snapshot.forEach((doc) => {
+        msgs.push({ id: doc.id, ...doc.data() });
+      });
+      setFriendMessages(msgs);
+    });
+    
+    return () => unsubscribe();
+  }, [activeChatFriend, getChatId]);
+
+  // Send a private direct message
+  const sendFriendMessage = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!activeChatFriend || !typedFriendMessage.trim() || !auth.currentUser?.uid) return;
+    
+    const chatId = getChatId(activeChatFriend.id);
+    const msgsRef = collection(db, 'chats', chatId, 'messages');
+    const textToSend = typedFriendMessage.trim();
+    setTypedFriendMessage('');
+    
+    try {
+      await addDoc(msgsRef, {
+        senderId: auth.currentUser.uid,
+        senderName: profile.username,
+        text: textToSend,
+        timestamp: serverTimestamp()
+      });
+    } catch (err) {
+      console.error("Error sending private message:", err);
+      toast.error("Failed to send message.");
+    }
+  };
 
   const [ping, setPing] = useState<number | null>(null);
 
@@ -920,11 +986,27 @@ const App: React.FC = () => {
     const currentGameState = gameStateRef.current;
     if (!currentGameState) return;
     
-    const matchRef = doc(db, 'matches', currentGameState.id);
     try {
       const isCurrentlyActive = currentGameState.players[myPlayerId]?.activeSignal === signalType;
       const nextSignal = isCurrentlyActive ? null : signalType;
       
+      if (nextSignal) {
+        if (signalType === 'trump_ace') {
+          if (trumpAceUsedCount >= 1) {
+            toast.error("⚠️ YELLOW GLOW LIMIT EXCEEDED (MAX 1 PER ROUND)");
+            return;
+          }
+          setTrumpAceUsedCount(prev => prev + 1);
+        } else if (signalType === 'double_guard') {
+          if (doubleGuardUsedCount >= 2) {
+            toast.error("⚠️ BLUE GLOW LIMIT EXCEEDED (MAX 2 PER ROUND)");
+            return;
+          }
+          setDoubleGuardUsedCount(prev => prev + 1);
+        }
+      }
+
+      const matchRef = doc(db, 'matches', currentGameState.id);
       const updatedPlayers = currentGameState.players.map(p => 
         p.id === myPlayerId ? { ...p, activeSignal: nextSignal } : p
       );
@@ -3738,119 +3820,117 @@ const App: React.FC = () => {
           })()}
         </div>
 
-        {/* Modern Comms & Tactics Dock - Bottom Right */}
-        <div className="absolute bottom-6 right-6 z-[450] flex flex-col gap-2.5 items-end">
-          <AnimatePresence>
-            {isTacticalPanelOpen && (
-              <motion.div 
-                initial={{ scale: 0.9, opacity: 0, y: 15 }}
-                animate={{ scale: 1, opacity: 1, y: 0 }}
-                exit={{ scale: 0.9, opacity: 0, y: 15 }}
-                className="glass-panel w-[280px] p-4 rounded-[2rem] border-white/10 backdrop-blur-2xl flex flex-col gap-3 shadow-2xl relative border border-indigo-500/20"
-              >
-                <div className="flex items-center justify-between border-b border-indigo-500/10 pb-2">
-                  <div>
-                    <div className="text-[9px] font-black text-transparent bg-clip-text bg-gradient-to-r from-indigo-300 to-amber-300 uppercase tracking-widest">TACTICS & COMMS</div>
-                    <div className="text-[6px] font-black text-white/30 uppercase mt-0.5">Coordinated Team Play</div>
-                  </div>
-                  <button 
-                    onClick={() => setIsTacticalPanelOpen(false)}
-                    className="w-5 h-5 rounded-full border border-white/10 hover:bg-white/5 text-[8px] flex items-center justify-center font-bold text-white/50"
-                  >
-                    ✕
-                  </button>
-                </div>
-
-                {/* Seat Glowing Signals */}
-                <div className="space-y-1">
-                  <span className="text-[6px] font-black text-indigo-400/80 uppercase tracking-wider block">GLOW TABLE SIGNALS</span>
-                  <div className="grid grid-cols-2 gap-1.5 font-sans">
-                    <button 
-                      onClick={() => toggleSeatSignal('trump_ace')}
-                      className={`p-1.5 rounded-xl border text-center transition-all ${
-                        gameState.players[myPlayerId]?.activeSignal === 'trump_ace'
-                          ? 'bg-amber-500/20 border-amber-400 text-amber-200 shadow-lg'
-                          : 'bg-white/5 border-white/5 hover:border-white/15 hover:bg-white/10 text-white/70'
-                      }`}
-                    >
-                      <div className="text-[7.5px] font-black">⭐ YELLOW GLOW</div>
-                    </button>
-                    <button 
-                      onClick={() => toggleSeatSignal('double_guard')}
-                      className={`p-1.5 rounded-xl border text-center transition-all ${
-                        gameState.players[myPlayerId]?.activeSignal === 'double_guard'
-                          ? 'bg-sky-500/20 border-sky-400 text-sky-200 shadow-lg'
-                          : 'bg-white/5 border-white/5 hover:border-white/15 hover:bg-white/10 text-white/70'
-                      }`}
-                    >
-                      <div className="text-[7.5px] font-black">🛡️ BLUE GLOW</div>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Card Play Arming */}
-                <div className="space-y-1">
-                  <span className="text-[6px] font-black text-indigo-400/80 uppercase tracking-wider block">ARM PLAY SIGNS</span>
-                  <div className="grid grid-cols-3 gap-1 font-sans">
-                    <button 
-                      onClick={() => setSelectedSignal(selectedSignal === 'slow' ? null : 'slow')}
-                      className={`py-1 rounded-lg border text-center transition-all ${
-                        selectedSignal === 'slow'
-                          ? 'bg-amber-500/25 border-amber-400 text-amber-200 font-black'
-                          : 'bg-white/5 border-white/5 hover:border-white/10 text-white/60 text-[7px]'
-                      }`}
-                    >
-                      <div className="text-[6.5px]">🐢 SLOW</div>
-                    </button>
-                    <button 
-                      onClick={() => setSelectedSignal(selectedSignal === 'spin' ? null : 'spin')}
-                      className={`py-1 rounded-lg border text-center transition-all ${
-                        selectedSignal === 'spin'
-                          ? 'bg-indigo-500/25 border-indigo-400 text-indigo-200 font-black'
-                          : 'bg-white/5 border-white/5 hover:border-white/10 text-white/60 text-[7px]'
-                      }`}
-                    >
-                      <div className="text-[6.5px]">🌀 SPIN</div>
-                    </button>
-                    <button 
-                      onClick={() => setSelectedSignal(selectedSignal === 'slam' ? null : 'slam')}
-                      className={`py-1 rounded-lg border text-center transition-all ${
-                        selectedSignal === 'slam'
-                          ? 'bg-red-500/25 border-red-400 text-red-200 font-black'
-                          : 'bg-white/5 border-white/5 hover:border-white/10 text-white/60 text-[7px]'
-                      }`}
-                    >
-                      <div className="text-[6.5px]">💥 SLAM</div>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Quick Chat Comms */}
-                <div className="space-y-1">
-                  <span className="text-[6px] font-black text-indigo-400/80 uppercase tracking-wider block">TALK COMMS (MESSAGES)</span>
-                  <div className="grid grid-cols-2 gap-1 max-h-[85px] overflow-y-auto custom-scrollbar pr-1 font-sans">
-                    {["Nice play partner! 👏", "Watch the trump! ⚠️", "I got this round! 😎", "Ouch, bad cards... 😢", "Win this! 🔥", "My bad! 🙏"].map((msg, idx) => (
-                      <button 
-                        key={`chat-opt-${idx}`}
-                        onClick={() => sendInGameMessage(msg)}
-                        className="p-1 px-1.5 rounded-lg bg-white/5 hover:bg-indigo-500/10 border border-white/5 hover:border-indigo-500/20 text-left text-white/70 text-[7.5px] font-bold leading-tight transition-all truncate"
-                      >
-                        {msg}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <button 
-            onClick={() => setIsTacticalPanelOpen(!isTacticalPanelOpen)}
-            className="w-12 h-12 rounded-full glass-panel flex flex-col items-center justify-center border-indigo-500/30 hover:border-indigo-500/60 hover:bg-indigo-600/10 transition-all shadow-[0_4px_25px_rgba(99,102,241,0.25)] relative"
+        {/* Floating Tactical Control Tower on the Side */}
+        <div className="absolute right-4 md:right-8 top-[22%] md:top-[28%] z-[450] flex flex-col gap-2.5 items-center pointer-events-auto">
+          <div className="text-[7px] font-black text-indigo-400/80 tracking-widest uppercase mb-1 drop-shadow">Tactical Tower</div>
+          
+          {/* Yellow Glow (A Signal) */}
+          <button
+            onClick={() => toggleSeatSignal('trump_ace')}
+            disabled={trumpAceUsedCount >= 1 && gameState.players[myPlayerId]?.activeSignal !== 'trump_ace'}
+            className={`w-11 h-11 md:w-13 md:h-13 rounded-2xl border flex flex-col items-center justify-center transition-all duration-300 relative ${
+              gameState.players[myPlayerId]?.activeSignal === 'trump_ace'
+                ? 'bg-amber-500/35 border-amber-400 text-amber-200 shadow-[0_0_15px_rgba(245,158,11,0.5)] scale-110 z-10'
+                : trumpAceUsedCount >= 1
+                  ? 'bg-black/40 border-white/5 opacity-40 text-white/20 cursor-not-allowed'
+                  : 'bg-indigo-950/40 border-white/10 hover:border-indigo-500/40 hover:bg-indigo-900/20 text-white/90'
+            }`}
+            title={`Yellow Glow (Trump Ace) - Limit: 1 use. Used: ${trumpAceUsedCount}/1`}
           >
-            <span className="text-lg animate-pulse">📢</span>
-            <span className="text-[6.5px] font-black text-indigo-400 uppercase leading-none tracking-widest mt-0.5">COMMS</span>
+            <span className="text-sm md:text-base">⭐</span>
+            <span className="text-[5.5px] font-mono font-black mt-0.5 uppercase tracking-tighter">
+              {gameState.players[myPlayerId]?.activeSignal === 'trump_ace' ? 'ACTIVE' : `1 LEFT`}
+            </span>
           </button>
+
+          {/* Blue Glow (Depend Signal) */}
+          <button
+            onClick={() => toggleSeatSignal('double_guard')}
+            disabled={doubleGuardUsedCount >= 2 && gameState.players[myPlayerId]?.activeSignal !== 'double_guard'}
+            className={`w-11 h-11 md:w-13 md:h-13 rounded-2xl border flex flex-col items-center justify-center transition-all duration-300 relative ${
+              gameState.players[myPlayerId]?.activeSignal === 'double_guard'
+                ? 'bg-sky-500/35 border-sky-400 text-sky-200 shadow-[0_0_15px_rgba(56,189,248,0.5)] scale-110 z-10'
+                : doubleGuardUsedCount >= 2
+                  ? 'bg-black/40 border-white/5 opacity-40 text-white/20 cursor-not-allowed'
+                  : 'bg-indigo-950/40 border-white/10 hover:border-indigo-500/40 hover:bg-indigo-900/20 text-white/90'
+            }`}
+            title={`Blue Glow (Double Guard) - Limit: 2 uses. Used: ${doubleGuardUsedCount}/2`}
+          >
+            <span className="text-sm md:text-base">🛡️</span>
+            <span className="text-[5.5px] font-mono font-black mt-0.5 uppercase tracking-tighter">
+              {gameState.players[myPlayerId]?.activeSignal === 'double_guard' ? 'ACTIVE' : `${2 - doubleGuardUsedCount} LEFT`}
+            </span>
+          </button>
+
+          {/* Slow play */}
+          <button
+            onClick={() => setSelectedSignal(selectedSignal === 'slow' ? null : 'slow')}
+            className={`w-11 h-11 md:w-13 md:h-13 rounded-2xl border flex flex-col items-center justify-center transition-all duration-300 ${
+              selectedSignal === 'slow'
+                ? 'bg-amber-500/35 border-amber-400 text-amber-200 shadow-[0_0_15px_rgba(245,158,11,0.4)] scale-110'
+                : 'bg-indigo-950/40 border-white/10 hover:border-indigo-500/40 hover:bg-indigo-900/20 text-white/70'
+            }`}
+            title="Slow Play Slide"
+          >
+            <span className="text-sm md:text-base">🐢</span>
+            <span className="text-[5.5px] font-black mt-0.5 uppercase tracking-tighter">SLOW</span>
+          </button>
+
+          {/* Spin play */}
+          <button
+            onClick={() => setSelectedSignal(selectedSignal === 'spin' ? null : 'spin')}
+            className={`w-11 h-11 md:w-13 md:h-13 rounded-2xl border flex flex-col items-center justify-center transition-all duration-300 ${
+              selectedSignal === 'spin'
+                ? 'bg-indigo-500/35 border-indigo-400 text-indigo-200 shadow-[0_0_15px_rgba(99,102,241,0.4)] scale-110'
+                : 'bg-indigo-950/40 border-white/10 hover:border-indigo-500/40 hover:bg-indigo-900/20 text-white/70'
+            }`}
+            title="Spin Card Slide"
+          >
+            <span className="text-sm md:text-base">🌀</span>
+            <span className="text-[5.5px] font-black mt-0.5 uppercase tracking-tighter">SPIN</span>
+          </button>
+
+          {/* Slam play */}
+          <button
+            onClick={() => setSelectedSignal(selectedSignal === 'slam' ? null : 'slam')}
+            className={`w-11 h-11 md:w-13 md:h-13 rounded-2xl border flex flex-col items-center justify-center transition-all duration-300 ${
+              selectedSignal === 'slam'
+                ? 'bg-red-500/35 border-red-400 text-red-200 shadow-[0_0_15px_rgba(239,68,68,0.4)] scale-110'
+                : 'bg-indigo-950/40 border-white/10 hover:border-indigo-500/40 hover:bg-indigo-900/20 text-white/70'
+            }`}
+            title="Slam Card Slide"
+          >
+            <span className="text-sm md:text-base">💥</span>
+            <span className="text-[5.5px] font-black mt-0.5 uppercase tracking-tighter">SLAM</span>
+          </button>
+
+          {/* Custom message form */}
+          <form 
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (typedMessage.trim()) {
+                sendInGameMessage(typedMessage.trim());
+                setTypedMessage('');
+              }
+            }}
+            className="mt-2 flex flex-col items-center gap-1 w-20 md:w-24 pointer-events-auto"
+          >
+            <input
+              type="text"
+              value={typedMessage}
+              onChange={(e) => setTypedMessage(e.target.value)}
+              maxLength={30}
+              placeholder="TYPE CHAT..."
+              className="w-full bg-black/75 border border-white/15 rounded-xl px-2 py-1.5 text-[8px] font-bold text-center outline-none focus:border-indigo-500/50 focus:bg-black text-white uppercase placeholder:text-white/20 transition-all font-sans"
+            />
+            <button
+              type="submit"
+              disabled={!typedMessage.trim()}
+              className="w-full py-1 text-[7px] font-black bg-indigo-650 hover:bg-indigo-600 hover:scale-105 active:scale-95 disabled:opacity-40 rounded-lg text-white uppercase tracking-wider transition-all shadow-md font-sans"
+            >
+              💬 SEND
+            </button>
+          </form>
         </div>
 
         {trumpAlert && (
@@ -3980,130 +4060,209 @@ const App: React.FC = () => {
                   <button onClick={() => setIsFriendsOpen(false)} className="text-white/40 hover:text-white transition-colors">✕</button>
                 </div>
 
-                <div className="flex gap-4 mb-8">
-                  <button 
-                    onClick={() => setFriendsTab('list')}
-                    className={`flex-1 py-3 rounded-xl text-[8px] font-black uppercase tracking-widest transition-all ${friendsTab === 'list' ? 'bg-indigo-600 text-white' : 'bg-white/5 text-white/40'}`}
-                  >
-                    Friends
-                  </button>
-                  <button 
-                    onClick={() => setFriendsTab('requests')}
-                    className={`flex-1 py-3 rounded-xl text-[8px] font-black uppercase tracking-widest transition-all relative ${friendsTab === 'requests' ? 'bg-indigo-600 text-white' : 'bg-white/5 text-white/40'}`}
-                  >
-                    Requests
-                    {friendRequests.length > 0 && (
-                      <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[8px] rounded-full flex items-center justify-center animate-pulse">
-                        {friendRequests.length}
-                      </span>
-                    )}
-                  </button>
-                </div>
-
-                {friendsTab === 'list' ? (
-                  <>
-                    <div className="space-y-4 mb-8">
-                      <div className="relative">
-                        <input 
-                          type="text" 
-                          value={friendSearch}
-                          onChange={e => setFriendSearch(e.target.value)}
-                          placeholder="SEARCH BY USERNAME" 
-                          className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-[10px] font-black outline-none focus:border-indigo-500/50 transition-all uppercase placeholder:text-white/20" 
-                        />
-                        <button 
-                          onClick={addFriend}
-                          disabled={isSearchingFriend || !friendSearch}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-[8px] font-black uppercase transition-all disabled:opacity-50"
-                        >
-                          {isSearchingFriend ? '...' : 'Add'}
-                        </button>
+                {activeChatFriend ? (
+                  <div className="flex-1 flex flex-col h-full overflow-hidden">
+                    {/* Chat Header */}
+                    <div className="flex items-center gap-3 border-b border-white/10 pb-4 mb-4">
+                      <button 
+                        onClick={() => setActiveChatFriend(null)}
+                        className="w-8 h-8 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center text-xs font-bold text-white transition-all"
+                      >
+                        ←
+                      </button>
+                      <div className="flex-1">
+                        <div className="text-xs font-black uppercase tracking-wider">{activeChatFriend.username}</div>
+                        <div className="text-[7.5px] font-mono uppercase tracking-widest text-indigo-400">
+                          {activeChatFriend.status === 'online' ? '🟢 ONLINE' : activeChatFriend.status === 'in-game' ? '🟣 IN MATCH' : '⚪ OFFLINE'}
+                        </div>
                       </div>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-                      {profile.friends.length === 0 ? (
-                        <div className="h-full flex flex-col items-center justify-center text-center opacity-20">
-                          <div className="text-4xl mb-4">👥</div>
-                          <p className="text-[10px] font-black uppercase tracking-widest">No friends yet.<br/>Start building your crew!</p>
+                    {/* Messages Area */}
+                    <div className="flex-1 overflow-y-auto space-y-3 mb-4 pr-1 custom-scrollbar flex flex-col select-none">
+                      {friendMessages.length === 0 ? (
+                        <div className="flex-1 flex flex-col items-center justify-center opacity-30 text-center text-[9px] font-black uppercase my-auto">
+                          <span>💬 PRIVATE CONVERSATION</span>
+                          <span className="text-[7px] text-white/45 mt-1 max-w-[200px] leading-relaxed">No messages yet. Send a friendly ping to initialize real-time connection!</span>
                         </div>
                       ) : (
-                        profile.friends.map((friend, idx) => (
-                          <motion.div 
-                            key={`friend-${friend.id}-${idx}`}
-                            initial={{ x: 20, opacity: 0 }}
-                            animate={{ x: 0, opacity: 1 }}
-                            className="glass-panel p-4 rounded-2xl border-white/5 flex items-center gap-4 group"
-                          >
-                            <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-lg relative">
-                              👤
-                              <div className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-[#0a0f1e] ${friend.status === 'online' ? 'bg-green-500' : friend.status === 'in-game' ? 'bg-purple-500' : 'bg-gray-500'}`}></div>
+                        friendMessages.map((msg, idx) => {
+                          const isMe = msg.senderId === auth.currentUser?.uid;
+                          return (
+                            <div 
+                              key={`msg-${msg.id || idx}`}
+                              className={`flex flex-col max-w-[85%] ${isMe ? 'self-end items-end' : 'self-start items-start'}`}
+                            >
+                              <div className={`px-3 py-2 rounded-2xl text-[9.5px]/snug font-bold border ${
+                                isMe 
+                                  ? 'bg-indigo-650/45 border-indigo-505/30 text-white rounded-tr-none' 
+                                  : 'bg-white/5 border-white/10 text-white/90 rounded-tl-none'
+                              }`}>
+                                {msg.text}
+                              </div>
+                              <span className="text-[5.5px] font-mono text-white/30 mt-0.5 uppercase">
+                                {msg.timestamp ? new Date(msg.timestamp.seconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'SENDING...'}
+                              </span>
                             </div>
-                            <div className="flex-1">
-                              <div className="text-[10px] font-black uppercase">{friend.username}</div>
-                              <div className="text-[8px] font-black text-white/40 uppercase">Level {friend.level}</div>
-                            </div>
-                            <div className="flex gap-2 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
-                              <button 
-                                onClick={() => inviteToArena(friend)}
-                                className="w-8 h-8 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-xs hover:bg-indigo-600/40 transition-all"
-                                title="Invite to Arena"
-                              >
-                                🎮
-                              </button>
-                              <button 
-                                onClick={() => teamupWithFriend(friend)}
-                                className="w-8 h-8 rounded-lg bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center text-xs hover:bg-emerald-600/40 transition-all"
-                                title="Teamup for Quick Match"
-                              >
-                                🤝
-                              </button>
-                            </div>
-                          </motion.div>
-                        ))
+                          );
+                        })
                       )}
                     </div>
-                  </>
-                ) : (
-                  <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-                    {friendRequests.length === 0 ? (
-                      <div className="h-full flex flex-col items-center justify-center text-center opacity-20">
-                        <div className="text-4xl mb-4">📩</div>
-                        <p className="text-[10px] font-black uppercase tracking-widest">No pending requests.</p>
-                      </div>
-                    ) : (
-                      friendRequests.map((req, idx) => (
-                        <motion.div 
-                          key={`req-${req.id}-${idx}`}
-                          initial={{ x: 20, opacity: 0 }}
-                          animate={{ x: 0, opacity: 1 }}
-                          className="glass-panel p-4 rounded-2xl border-white/5 flex items-center gap-4"
-                        >
-                          <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-lg">
-                            👤
-                          </div>
-                          <div className="flex-1">
-                            <div className="text-[10px] font-black uppercase">{req.fromUsername}</div>
-                            <div className="text-[8px] font-black text-white/40 uppercase">Wants to be friends</div>
-                          </div>
-                          <div className="flex gap-2">
-                            <button 
-                              onClick={() => acceptRequest(req)}
-                              className="w-8 h-8 rounded-lg bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center text-[8px] hover:bg-emerald-600/40 transition-all"
-                            >
-                              ✓
-                            </button>
-                            <button 
-                              onClick={() => rejectRequest(req.id)}
-                              className="w-8 h-8 rounded-lg bg-red-600/20 border border-red-500/30 flex items-center justify-center text-[8px] hover:bg-red-600/40 transition-all"
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        </motion.div>
-                      ))
-                    )}
+
+                    {/* Chat Input */}
+                    <form onSubmit={sendFriendMessage} className="flex gap-2 pb-2">
+                      <input 
+                        type="text" 
+                        value={typedFriendMessage}
+                        onChange={e => setTypedFriendMessage(e.target.value)}
+                        placeholder="TYPE MESSAGE..." 
+                        maxLength={100}
+                        className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-[10px] font-black text-white outline-none focus:border-indigo-500/50 transition-all uppercase placeholder:text-white/20" 
+                      />
+                      <button 
+                        type="submit" 
+                        disabled={!typedFriendMessage.trim()}
+                        className="bg-indigo-600 hover:bg-indigo-500 text-white hover:scale-[1.03] active:scale-[0.97] disabled:opacity-40 px-4 rounded-xl text-[8px] font-black uppercase transition-all shadow"
+                      >
+                        SEND
+                      </button>
+                    </form>
                   </div>
+                ) : (
+                  <>
+                    <div className="flex gap-4 mb-8">
+                      <button 
+                        onClick={() => setFriendsTab('list')}
+                        className={`flex-1 py-3 rounded-xl text-[8px] font-black uppercase tracking-widest transition-all ${friendsTab === 'list' ? 'bg-indigo-600 text-white' : 'bg-white/5 text-white/40'}`}
+                      >
+                        Friends
+                      </button>
+                      <button 
+                        onClick={() => setFriendsTab('requests')}
+                        className={`flex-1 py-3 rounded-xl text-[8px] font-black uppercase tracking-widest transition-all relative ${friendsTab === 'requests' ? 'bg-indigo-600 text-white' : 'bg-white/5 text-white/40'}`}
+                      >
+                        Requests
+                        {friendRequests.length > 0 && (
+                          <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[8px] rounded-full flex items-center justify-center animate-pulse">
+                            {friendRequests.length}
+                          </span>
+                        )}
+                      </button>
+                    </div>
+
+                    {friendsTab === 'list' ? (
+                      <>
+                        <div className="space-y-4 mb-8">
+                          <div className="relative">
+                            <input 
+                              type="text" 
+                              value={friendSearch}
+                              onChange={e => setFriendSearch(e.target.value)}
+                              placeholder="SEARCH BY USERNAME" 
+                              className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-[10px] font-black outline-none focus:border-indigo-500/50 transition-all uppercase placeholder:text-white/20" 
+                            />
+                            <button 
+                              onClick={addFriend}
+                              disabled={isSearchingFriend || !friendSearch}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-[8px] font-black uppercase transition-all disabled:opacity-50"
+                            >
+                              {isSearchingFriend ? '...' : 'Add'}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
+                          {profile.friends.length === 0 ? (
+                            <div className="h-full flex flex-col items-center justify-center text-center opacity-20">
+                              <div className="text-4xl mb-4">👥</div>
+                              <p className="text-[10px] font-black uppercase tracking-widest">No friends yet.<br/>Start building your crew!</p>
+                            </div>
+                          ) : (
+                            profile.friends.map((friend, idx) => (
+                              <motion.div 
+                                key={`friend-${friend.id}-${idx}`}
+                                initial={{ x: 20, opacity: 0 }}
+                                animate={{ x: 0, opacity: 1 }}
+                                className="glass-panel p-4 rounded-2xl border-white/5 flex items-center gap-4 group"
+                              >
+                                <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-lg relative">
+                                  👤
+                                  <div className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-[#0a0f1e] ${friend.status === 'online' ? 'bg-green-500' : friend.status === 'in-game' ? 'bg-purple-500' : 'bg-gray-500'}`}></div>
+                                </div>
+                                <div className="flex-1">
+                                  <div className="text-[10px] font-black uppercase">{friend.username}</div>
+                                  <div className="text-[8px] font-black text-white/40 uppercase">Level {friend.level}</div>
+                                </div>
+                                <div className="flex gap-1.5 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
+                                  <button 
+                                    onClick={() => setActiveChatFriend(friend)}
+                                    className="w-7 h-7 rounded-lg bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-[10px] hover:bg-indigo-500/40 transition-all"
+                                    title="Direct Chat with Friend"
+                                  >
+                                    💬
+                                  </button>
+                                  <button 
+                                    onClick={() => inviteToArena(friend)}
+                                    className="w-7 h-7 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-[10px] hover:bg-indigo-600/40 transition-all"
+                                    title="Invite to Arena"
+                                  >
+                                    🎮
+                                  </button>
+                                  <button 
+                                    onClick={() => teamupWithFriend(friend)}
+                                    className="w-7 h-7 rounded-lg bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center text-[10px] hover:bg-emerald-600/40 transition-all"
+                                    title="Teamup for Quick Match"
+                                  >
+                                    🤝
+                                  </button>
+                                </div>
+                              </motion.div>
+                            ))
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
+                        {friendRequests.length === 0 ? (
+                          <div className="h-full flex flex-col items-center justify-center text-center opacity-20">
+                            <div className="text-4xl mb-4">📩</div>
+                            <p className="text-[10px] font-black uppercase tracking-widest">No pending requests.</p>
+                          </div>
+                        ) : (
+                          friendRequests.map((req, idx) => (
+                            <motion.div 
+                              key={`req-${req.id}-${idx}`}
+                              initial={{ x: 20, opacity: 0 }}
+                              animate={{ x: 0, opacity: 1 }}
+                              className="glass-panel p-4 rounded-2xl border-white/5 flex items-center gap-4"
+                            >
+                              <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-lg">
+                                👤
+                              </div>
+                              <div className="flex-1">
+                                <div className="text-[10px] font-black uppercase">{req.fromUsername}</div>
+                                <div className="text-[8px] font-black text-white/40 uppercase">Wants to be friends</div>
+                              </div>
+                              <div className="flex gap-2">
+                                <button 
+                                  onClick={() => acceptRequest(req)}
+                                  className="w-8 h-8 rounded-lg bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center text-[8px] hover:bg-emerald-600/40 transition-all"
+                                >
+                                  ✓
+                                </button>
+                                <button 
+                                  onClick={() => rejectRequest(req.id)}
+                                  className="w-8 h-8 rounded-lg bg-red-600/20 border border-red-500/30 flex items-center justify-center text-[8px] hover:bg-red-600/40 transition-all"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            </motion.div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </>
                 )}
               </motion.div>
             </>

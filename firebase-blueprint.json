@@ -72,6 +72,18 @@
         "updatedAt": { "type": "object" }
       },
       "required": ["id", "players", "roundStatus", "playerUids", "mode"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Private direct message between friends",
+      "type": "object",
+      "properties": {
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "text": { "type": "string" },
+        "timestamp": { "type": "object" }
+      },
+      "required": ["senderId", "senderName", "text"]
     }
   },
   "firestore": {
@@ -86,6 +98,10 @@
     "/matches/{matchId}": {
       "schema": "Match",
       "description": "Active and past game matches"
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "Direct message chat history"
     },
     "/_connection_test_/{docId}": {
       "schema": { "type": "object", "properties": {} },
