@@ -10,7 +10,9 @@ export interface Card {
 
 export interface Player {
   id: number;
+  uid?: string;
   name: string;
+  avatar?: string | null;
   hand: Card[];
   score: number;
   isAI: boolean;
@@ -35,6 +37,7 @@ export interface UserProfile {
   losses: number;
   gamesPlayed: number;
   username: string;
+  avatar?: string | null;
   xp: number;
   level: number;
   scraps: number;

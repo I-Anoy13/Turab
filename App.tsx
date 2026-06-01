@@ -33,7 +33,7 @@ import { toast, Toaster } from 'sonner';
 import { auth, db } from './firebase';
 import { Card, GameState, Player, Suit, SUITS, RANKS, RANK_VALUES, UserProfile, AppView, GameMode, Friend, FriendRequest } from './types';
 import CardComponent from './components/CardComponent';
-import { Pencil, Clock } from 'lucide-react';
+import { Pencil, Clock, Camera } from 'lucide-react';
 
 const INITIAL_COINS = 500;
 const STAKE_AMOUNT = 200;
@@ -290,6 +290,148 @@ const getNumericPlayerId = (uid: string): string => {
   return (positive % 900000000 + 100000000).toString();
 };
 
+const FlippingCardLoader: React.FC = () => {
+  const cardPool = [
+    { value: 'A', suit: '♠', color: 'text-indigo-400 border-indigo-500/20' },
+    { value: 'K', suit: '♦', color: 'text-amber-500 border-amber-500/20' },
+    { value: 'Q', suit: '♥', color: 'text-rose-500 border-rose-500/20' },
+    { value: 'J', suit: '♣', color: 'text-emerald-400 border-emerald-500/20' },
+    { value: '10', suit: '♥', color: 'text-rose-500 border-rose-500/20' },
+    { value: '9', suit: '♦', color: 'text-amber-500 border-amber-500/20' },
+    { value: '8', suit: '♠', color: 'text-indigo-400 border-indigo-500/20' },
+    { value: '2', suit: '♣', color: 'text-emerald-400 border-emerald-500/20' },
+    { value: '👑', suit: '🃏', color: 'text-yellow-400 border-yellow-500/20' }
+  ];
+
+  const [cardIndex, setCardIndex] = useState(0);
+  const [rotation, setRotation] = useState(0);
+
+  useEffect(() => {
+    // Continuous rotation increments on cycle
+    const interval = setInterval(() => {
+      setRotation(prev => prev + 180);
+    }, 1000); // 1-second flips
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Update indices midway during transition so they swap card graphics invisibly
+  useEffect(() => {
+    if (rotation === 0) return;
+    const timeout = setTimeout(() => {
+      setCardIndex(prev => (prev + 1) % cardPool.length);
+    }, 500); // Halfway of 1000ms transition is 500ms
+
+    return () => clearTimeout(timeout);
+  }, [rotation]);
+
+  const activeCard = cardPool[cardIndex];
+  const nextCard = cardPool[(cardIndex + 1) % cardPool.length];
+
+  return (
+    <div className="w-24 h-36 relative select-none font-sans" style={{ perspective: '800px' }}>
+      <motion.div
+        animate={{ rotateY: rotation }}
+        transition={{ duration: 1, ease: 'easeInOut' }}
+        style={{ transformStyle: 'preserve-3d' }}
+        className="w-full h-full relative"
+      >
+        {/* Front of the card */}
+        <div 
+          style={{ backfaceVisibility: 'hidden' }}
+          className={`absolute inset-0 bg-[#070a16] border ${activeCard.color} rounded-2xl flex flex-col justify-between p-4 shadow-[0_4px_30px_rgba(0,0,0,0.5)]`}
+        >
+          {/* Top Left index - Horizontal "cross printed" */}
+          <div className="flex flex-row items-center gap-1 font-mono text-[11px] font-black tracking-tight leading-none">
+            <span>{activeCard.value}</span>
+            <span className="opacity-80">{activeCard.suit}</span>
+          </div>
+
+          {/* Central Suite Icon */}
+          <div className="flex justify-center items-center">
+            <span className="text-4xl filter drop-shadow-[0_0_12px_rgba(255,255,255,0.08)] select-none">
+              {activeCard.suit}
+            </span>
+          </div>
+
+          {/* Bottom Right index - Rotated Horizontal */}
+          <div className="flex flex-row items-center gap-1 font-mono text-[11px] font-black tracking-tight leading-none rotate-180 self-end">
+            <span>{activeCard.value}</span>
+            <span className="opacity-80">{activeCard.suit}</span>
+          </div>
+        </div>
+
+        {/* Back of the card (Next card face) */}
+        <div 
+          style={{ 
+            backfaceVisibility: 'hidden',
+            transform: 'rotateY(180deg)'
+          }}
+          className={`absolute inset-0 bg-[#070a16] border ${nextCard.color} rounded-2xl flex flex-col justify-between p-4 shadow-[0_4px_30px_rgba(0,0,0,0.5)]`}
+        >
+          {/* Top Left index - Horizontal "cross printed" */}
+          <div className="flex flex-row items-center gap-1 font-mono text-[11px] font-black tracking-tight leading-none">
+            <span>{nextCard.value}</span>
+            <span className="opacity-80">{nextCard.suit}</span>
+          </div>
+
+          {/* Central Suite Icon */}
+          <div className="flex justify-center items-center">
+            <span className="text-4xl filter drop-shadow-[0_0_12px_rgba(255,255,255,0.08)] select-none">
+              {nextCard.suit}
+            </span>
+          </div>
+
+          {/* Bottom Right index - Rotated Horizontal */}
+          <div className="flex flex-row items-center gap-1 font-mono text-[11px] font-black tracking-tight leading-none rotate-180 self-end">
+            <span>{nextCard.value}</span>
+            <span className="opacity-80">{nextCard.suit}</span>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
+const compressAvatar = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 120;
+        const MAX_HEIGHT = 120;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.65);
+        resolve(compressedDataUrl);
+      };
+      img.onerror = (err) => reject(err);
+    };
+    reader.onerror = (err) => reject(err);
+  });
+};
+
 const App: React.FC = () => {
   const [view, setView] = useState<AppView>('login');
   const [profile, setProfile] = useState<UserProfile>({ 
@@ -304,6 +446,10 @@ const App: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isExitConfirmOpen, setIsExitConfirmOpen] = useState(false);
   const [lobbyPlayerNames, setLobbyPlayerNames] = useState<Record<string, string>>({});
+  const [lobbyPlayerAvatars, setLobbyPlayerAvatars] = useState<Record<string, string>>({});
+  const [visualTrick, setVisualTrick] = useState<{ playerId: number; card: Card; signal?: "slow" | "spin" | "slam" | null }[]>([]);
+  const [wipingWinnerId, setWipingWinnerId] = useState<number | null>(null);
+  const [wipingToPile, setWipingToPile] = useState<boolean>(false);
   const processingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isProcessingRef = useRef(false);
   const gameStateRef = useRef<GameState | null>(null);
@@ -358,6 +504,7 @@ const App: React.FC = () => {
   const [joinCode, setJoinCode] = useState('');
   const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
   const [newUsername, setNewUsername] = useState('');
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
   
   // Sync Firebase Profile
   const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
@@ -932,6 +1079,36 @@ const App: React.FC = () => {
     }
   }, []);
 
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      toast.error("Please select a valid image file.");
+      return;
+    }
+
+    const loadId = toast.loading("OPTIMIZING AVATAR...");
+    try {
+      const compressedStr = await compressAvatar(file);
+      const updatedProfile = { ...profile, avatar: compressedStr };
+      setProfile(updatedProfile);
+      
+      if (auth.currentUser?.uid) {
+        setLobbyPlayerAvatars(prev => ({
+          ...prev,
+          [auth.currentUser!.uid]: compressedStr
+        }));
+      }
+
+      await syncProfileToCloud(updatedProfile);
+      toast.success("AVATAR UPLOADED SUCCESSFULLY!", { id: loadId });
+    } catch (err) {
+      console.error("Avatar upload error:", err);
+      toast.error("Failed to upload avatar.", { id: loadId });
+    }
+  };
+
   useEffect(() => {
     const testConnection = async () => {
       // Small delay to allow SDK to initialize
@@ -1343,7 +1520,7 @@ const App: React.FC = () => {
     console.log(`🛠 Setting up ${mode} match: ${matchId}`);
     
     const players: Player[] = [
-      { id: 0, name: profile.username, hand: [], score: 0, isAI: false, consecutiveWins: 0, lastWinWasAce: false },
+      { id: 0, uid: auth.currentUser!.uid, name: profile.username, avatar: profile.avatar || null, hand: [], score: 0, isAI: false, consecutiveWins: 0, lastWinWasAce: false },
       { id: 1, name: 'WEST_AI', hand: [], score: 0, isAI: true, consecutiveWins: 0, lastWinWasAce: false },
       { id: 2, name: 'NORTH_AI', hand: [], score: 0, isAI: true, consecutiveWins: 0, lastWinWasAce: false },
       { id: 3, name: 'EAST_AI', hand: [], score: 0, isAI: true, consecutiveWins: 0, lastWinWasAce: false },
@@ -1620,10 +1797,12 @@ const App: React.FC = () => {
           if (seatId !== undefined && seatId < 4) {
             updatedPlayers[seatId] = {
               id: seatId,
+              uid: uid,
               score: 0,
               consecutiveWins: 0,
               lastWinWasAce: false,
               name: lobbyPlayerNames[uid] || (uid === auth.currentUser?.uid ? profile.username : 'Player'),
+              avatar: lobbyPlayerAvatars[uid] || (uid === auth.currentUser?.uid ? profile.avatar : null),
               hand: deck.slice(seatId * 13, (seatId + 1) * 13),
               isAI: false
             };
@@ -1664,9 +1843,37 @@ const App: React.FC = () => {
   }, [gameState?.id, lobbyPlayerNames, profile.username, setSafeProcessing]);
 
   const playCardSound = useCallback(() => {
-    const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/261/261-preview.mp3');
-    audio.volume = 0.25;
-    audio.play().catch(() => {});
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const bufferSize = audioCtx.sampleRate * 0.05;
+      const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+      const output = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        output[i] = Math.random() * 2 - 1;
+      }
+      
+      const whiteNoise = audioCtx.createBufferSource();
+      whiteNoise.buffer = buffer;
+      
+      const filter = audioCtx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(1200, audioCtx.currentTime);
+      filter.Q.setValueAtTime(4, audioCtx.currentTime);
+      
+      const gainNode = audioCtx.createGain();
+      gainNode.gain.setValueAtTime(0.03, audioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.045);
+      
+      whiteNoise.connect(filter);
+      filter.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      
+      whiteNoise.start();
+    } catch (err) {
+      const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/261/261-preview.mp3');
+      audio.volume = 0.05;
+      audio.play().catch(() => {});
+    }
   }, []);
 
   const playSweepSound = useCallback(() => {
@@ -1701,7 +1908,12 @@ const App: React.FC = () => {
               playCardSound();
             }
           } else if (newTrickLen === 0 && oldTrickLen >= 1) {
-            playSweepSound();
+            // ONLY play sweep sound if a player got/won the pile (wonPile size increased!)
+            const oldWonPileLen = prev.wonPile?.length || 0;
+            const newWonPileLen = data.wonPile?.length || 0;
+            if (newWonPileLen > oldWonPileLen) {
+              playSweepSound();
+            }
           }
 
           if (newStatus === 'playing' && oldStatus === 'lobby') {
@@ -2068,21 +2280,63 @@ const App: React.FC = () => {
     
     const fetchNames = async () => {
       const names = { ...lobbyPlayerNames };
+      const avatars = { ...lobbyPlayerAvatars };
       let changed = false;
       for (const uid of gameState.playerUids) {
-        if (!names[uid]) {
+        if (!names[uid] || !avatars[uid]) {
           const uSnap = await getDoc(doc(db, 'users', uid));
           if (uSnap.exists()) {
-            names[uid] = uSnap.data().username;
+            const userData = uSnap.data();
+            names[uid] = userData.username;
+            avatars[uid] = userData.avatar || '';
             changed = true;
           }
         }
       }
-      if (changed) setLobbyPlayerNames(names);
+      if (changed) {
+        setLobbyPlayerNames(names);
+        setLobbyPlayerAvatars(avatars);
+      }
     };
     
     fetchNames();
   }, [gameState?.playerUids, view]);
+
+  // Synchronize visual trick state to allow a gorgeous wipe-away transition on clear
+  useEffect(() => {
+    if (!gameState) {
+      setVisualTrick([]);
+      setWipingWinnerId(null);
+      setWipingToPile(false);
+      return;
+    }
+
+    const currentTrick = gameState.currentTrick || [];
+
+    if (currentTrick.length > 0) {
+      setVisualTrick(currentTrick);
+      setWipingWinnerId(null);
+      setWipingToPile(false);
+    } else if (currentTrick.length === 0 && visualTrick.length > 0) {
+      // Find trick winner based on cards in visualTrick
+      const leadSuit = gameState.leadSuit || visualTrick[0]?.card.suit;
+      const winnerId = determineTrickWinner(visualTrick, leadSuit, gameState.trumpSuit);
+
+      // If database pile has been cleared, it means someone secured (got) the pile!
+      const gotPile = (gameState.pile?.length === 0) && (gameState.wonPile?.length > 0);
+
+      setWipingWinnerId(winnerId);
+      setWipingToPile(!gotPile);
+
+      const delayTimer = setTimeout(() => {
+        setVisualTrick([]);
+        setWipingWinnerId(null);
+        setWipingToPile(false);
+      }, 750);
+
+      return () => clearTimeout(delayTimer);
+    }
+  }, [gameState?.currentTrick, gameState?.pile?.length, determineTrickWinner]);
 
   const [searchingStartTime, setSearchingStartTime] = useState<number | null>(null);
   const [countdown, setCountdown] = useState(10);
@@ -2293,8 +2547,12 @@ const App: React.FC = () => {
               {gameState?.playerUids.map((uid, i) => (
                 <div key={`lobby-player-${i}`} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10">
                   <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-[10px]">
-                      {lobbyPlayerNames[uid]?.[0]?.toUpperCase() || 'P'}
+                    <div className="w-8 h-8 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-[10px] overflow-hidden">
+                      {lobbyPlayerAvatars[uid] ? (
+                        <img src={lobbyPlayerAvatars[uid]} className="w-full h-full object-cover" alt="Avatar" referrerPolicy="no-referrer" />
+                      ) : (
+                        lobbyPlayerNames[uid]?.[0]?.toUpperCase() || 'P'
+                      )}
                     </div>
                     <span className="font-black uppercase text-xs">
                       {lobbyPlayerNames[uid] || (uid === auth.currentUser?.uid ? profile.username : 'Elite Player')}
@@ -2559,12 +2817,23 @@ const App: React.FC = () => {
               className="glass-panel p-5 md:p-6 rounded-3xl border-white/10 flex items-center gap-4 shadow-2xl relative overflow-hidden group"
             >
               <div className="absolute inset-0 bg-gradient-to-br from-indigo-600/5 to-purple-600/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-              <div className="w-14 h-14 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-2xl shadow-inner relative z-10">
-                👤
-                <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-indigo-600 border-2 border-[#0a0f1e] flex items-center justify-center text-[8px] font-black">
+              <button 
+                onClick={() => avatarInputRef.current?.click()}
+                className="w-14 h-14 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-2xl shadow-inner relative z-10 overflow-hidden group/avatar cursor-pointer hover:border-indigo-400 active:scale-95 transition-all outline-none"
+                title="Click to update avatar picture"
+              >
+                {profile.avatar ? (
+                  <img src={profile.avatar} className="w-full h-full object-cover transition-transform group-hover/avatar:scale-110" alt="avatar" referrerPolicy="no-referrer" />
+                ) : (
+                  '👤'
+                )}
+                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/avatar:opacity-100 flex items-center justify-center transition-opacity">
+                  <Camera size={14} className="text-white" />
+                </div>
+                <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-indigo-600 border-2 border-[#0a0f1e] flex items-center justify-center text-[8px] font-black z-20">
                   {profile.level}
                 </div>
-              </div>
+              </button>
               <div className="flex-1 relative z-10 text-left">
                 <div className="flex items-center justify-between mb-1">
                   <div className={`text-[7px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${userRank.bg} ${userRank.color} border ${userRank.border} w-fit`}>{userRank.title}</div>
@@ -3105,7 +3374,7 @@ const App: React.FC = () => {
                       </div>
                     )}
 
-                    <div className={`w-12 h-12 rounded-full glass-panel flex items-center justify-center text-xl border-2 transition-all duration-300 ${
+                    <div className={`w-12 h-12 rounded-full glass-panel flex items-center justify-center text-xl border-2 transition-all duration-300 overflow-hidden ${
                       p.activeSignal === 'trump_ace'
                         ? 'border-yellow-400 scale-110 shadow-[0_0_25px_#fbbf24] bg-yellow-950/40'
                         : p.activeSignal === 'double_guard'
@@ -3114,7 +3383,18 @@ const App: React.FC = () => {
                             ? 'border-indigo-400 scale-110 shadow-[0_0_20px_rgba(129,140,248,0.4)] bg-indigo-950/40' 
                             : 'border-white/10'
                     }`}>
-                      {p.isAI ? '🤖' : '👤'}
+                      {p.isAI ? (
+                        '🤖'
+                      ) : p.avatar || (p.uid && lobbyPlayerAvatars[p.uid]) ? (
+                        <img 
+                          src={p.avatar || (p.uid ? lobbyPlayerAvatars[p.uid] : undefined)} 
+                          className="w-full h-full object-cover" 
+                          alt="avatar" 
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        '👤'
+                      )}
                     </div>
                     {isCurrentTurn && (
                       <>
@@ -3201,7 +3481,7 @@ const App: React.FC = () => {
           </div>
 
           <div className="relative w-full h-full flex items-center justify-center pointer-events-none">
-            {gameState.currentTrick.map((t, idx) => {
+            {visualTrick.map((t, idx) => {
               const offsets = [
                 "translate-y-[70px] md:translate-y-[120px]", // South
                 "-translate-x-[70px] md:-translate-x-[120px]", // West
@@ -3224,8 +3504,33 @@ const App: React.FC = () => {
                     ? 'animate-slam-play' 
                     : 'animate-deal';
 
+              // Build smooth physical sliding/shrink animation style when trick is complete/wiping
+              let styleObj: React.CSSProperties = { transition: 'all 750ms cubic-bezier(0.19, 1, 0.22, 1)' };
+              let wrapperClass = `absolute z-[50] ${offsets[visualIdx]}`;
+              
+              if (wipingWinnerId !== null) {
+                wrapperClass = `absolute z-[50]`;
+                if (wipingToPile) {
+                  styleObj.transform = 'translate(-160px, 0) scale(0.15) rotate(-20deg)';
+                } else {
+                  const winnerVisualIdx = (wipingWinnerId - myPlayerId + 4) % 4;
+                  const targetOffsets = [
+                    "translate(0, 260px) scale(0.1) rotate(10deg)",   // South
+                    "translate(-260px, 0) scale(0.1) rotate(-10deg)", // West
+                    "translate(0, -260px) scale(0.1) rotate(10deg)",  // North
+                    "translate(260px, 0) scale(0.1) rotate(-10deg)"  // East
+                  ];
+                  styleObj.transform = targetOffsets[winnerVisualIdx];
+                }
+                styleObj.opacity = 0;
+              }
+
               return (
-                <div key={`trick-card-${t.playerId}-${t.card.suit}-${t.card.rank}-${idx}`} className={`absolute z-[50] ${offsets[visualIdx]}`}>
+                <div 
+                  key={`trick-card-${t.playerId}-${t.card.suit}-${t.card.rank}-${idx}`} 
+                  className={wrapperClass}
+                  style={styleObj}
+                >
                   <div className={`${dealAnimationClass} ${isTrump ? 'animate-trump-play' : ''}`}>
                     <div className="relative">
                       {/* Slam shockwave pulse overlay */}
@@ -3247,15 +3552,26 @@ const App: React.FC = () => {
                         skin={profile.activeSkin} 
                         className={`scale-75 md:scale-100 shadow-2xl transition-all duration-300 ${isWinning ? 'winner-highlight' : ''} ${isTrump ? 'shadow-[0_0_30px_rgba(99,102,241,0.8)]' : ''}`} 
                       />
-                      <div className={`absolute -top-4 -right-4 w-10 h-10 rounded-full glass-panel border-2 flex items-center justify-center text-lg shadow-2xl z-[60] ${isWinning ? 'border-yellow-400 bg-yellow-400/20' : 'border-white/30 bg-indigo-900/80'}`}>
-                        {isAI ? '🤖' : '👤'}
+                      <div className={`absolute -top-4 -right-4 w-10 h-10 rounded-full glass-panel border-2 flex items-center justify-center text-lg shadow-2xl z-[60] overflow-hidden ${isWinning ? 'border-yellow-400 bg-yellow-400/20' : 'border-white/30 bg-indigo-900/80'}`}>
+                        {isAI ? (
+                          '🤖'
+                        ) : playedByPlayer?.avatar || (playedByPlayer?.uid && lobbyPlayerAvatars[playedByPlayer.uid]) ? (
+                          <img 
+                            src={playedByPlayer?.avatar || (playedByPlayer?.uid ? lobbyPlayerAvatars[playedByPlayer.uid] : undefined)} 
+                            className="w-full h-full object-cover" 
+                            alt="avatar" 
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          '👤'
+                        )}
                       </div>
-                      {isWinning && (
+                      {isWinning && wipingWinnerId === null && (
                         <div className={`absolute left-1/2 -translate-x-1/2 bg-yellow-400 text-black text-[10px] font-black px-3 py-1 rounded-full uppercase whitespace-nowrap shadow-[0_0_15px_rgba(251,191,36,0.5)] border border-black/20 animate-pulse ${hasSignal ? '-bottom-14' : '-bottom-8'}`}>
                           Winning
                         </div>
                       )}
-                      {isTrump && (
+                      {isTrump && wipingWinnerId === null && (
                         <div className="absolute -top-8 left-1/2 -translate-x-1/2 text-indigo-400 text-[10px] font-black uppercase tracking-widest animate-bounce">
                           Trump!
                         </div>
@@ -3628,11 +3944,11 @@ const App: React.FC = () => {
                 ELITE CARD SERIES
               </span>
 
-              {/* Progress Bar / Spinner */}
-              <div className="mt-8 flex flex-col items-center gap-2">
-                <div className="w-12 h-12 rounded-full border-2 border-indigo-500/10 border-t-amber-400 border-r-amber-400/50 animate-spin" />
-                <span className="text-[7.5px] font-black uppercase text-white/30 tracking-[0.25em] animate-pulse">
-                  ESTABLISHING SECURE DECK...
+              {/* Premium Flipping Card Loader */}
+              <div className="mt-8 flex flex-col items-center gap-6">
+                <FlippingCardLoader />
+                <span className="text-[8px] font-black uppercase text-amber-400 tracking-[0.3em] animate-pulse font-mono">
+                  SHUFFLING DECKS & LOADING RESOURCES...
                 </span>
               </div>
             </motion.div>
@@ -3847,9 +4163,11 @@ const App: React.FC = () => {
           )}
         </AnimatePresence>
 
-        <div className="fixed top-3 right-4 px-2 py-1 bg-black/30 backdrop-blur-md rounded-full text-[9px] font-bold text-white/50 select-none pointer-events-none z-[9999] uppercase tracking-widest border border-white/10">
-          v{APP_VERSION}
-        </div>
+        {view === 'home' && (
+          <div className="fixed top-3 right-4 px-2 py-1 bg-black/30 backdrop-blur-md rounded-full text-[9px] font-bold text-white/50 select-none pointer-events-none z-[9999] uppercase tracking-widest border border-white/10">
+            v{APP_VERSION}
+          </div>
+        )}
         <div className="fixed bottom-3 right-4 flex items-center gap-1.5 px-2.5 py-1 bg-black/40 backdrop-blur-md rounded-full text-[9px] font-black tracking-widest text-white/50 select-none pointer-events-none z-[9999] uppercase border border-white/5">
           <span className={`w-1.5 h-1.5 rounded-full ${
             isOffline 
@@ -3870,6 +4188,14 @@ const App: React.FC = () => {
                 : `${ping}ms`}
           </span>
         </div>
+
+        <input 
+          type="file" 
+          ref={avatarInputRef} 
+          onChange={handleAvatarChange} 
+          accept="image/*" 
+          className="hidden" 
+        />
       </div>
     </ErrorBoundary>
   );
