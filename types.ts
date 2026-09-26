@@ -43,7 +43,7 @@ export interface UserProfile {
   scraps: number;
   coupons: number;
   skins: string[];
-  activeSkin: 'classic' | 'neon' | 'gold' | 'void';
+  activeSkin: 'classic' | 'neon' | 'gold' | 'void' | 'inferno' | 'cyberpunk';
   frames: string[];
   activeFrame: 'none' | 'elite' | 'grandmaster' | 'thunder';
   role: 'admin' | 'user';
@@ -51,8 +51,27 @@ export interface UserProfile {
   usernameLastChangedAt?: number;
 }
 
+export interface EventAnnouncement {
+  id: string;
+  title: string;
+  subtitle: string;
+  badge: string;
+  description: string;
+  crateName: string;
+  crateCostCoins: number;
+  featuredSkins: {
+    id: 'inferno' | 'cyberpunk';
+    name: string;
+    rarity: 'Legendary';
+    description: string;
+    dropRate: string;
+  }[];
+  active: boolean;
+  updatedAt?: any;
+}
+
 export type GameMode = 'classic' | 'private' | 'join';
-export type AppView = 'login' | 'home' | 'game' | 'searching' | 'crate' | 'missions' | 'lobby';
+export type AppView = 'login' | 'home' | 'game' | 'searching' | 'crate' | 'missions' | 'lobby' | 'events';
 
 export interface FriendRequest {
   id: string;
@@ -81,8 +100,29 @@ export interface GameState {
   playerUids: string[]; // To track real human players
   mode: 'classic' | 'private';
   partnerUid?: string | null;
+  finalScores?: {
+    teamAlpha: number;
+    teamBeta: number;
+  };
+  winnerTeam?: 'alpha' | 'beta' | 'tie';
+  gameStartedAt?: any;
+  endedAt?: any;
   createdAt?: any;
   updatedAt?: any;
+}
+
+export interface MatchHistoryEntry {
+  id: string;
+  date: string;
+  rawDate?: any;
+  opponents: string;
+  opponentList: string[];
+  myTeamNames: string;
+  finalScoreMyTeam: number;
+  finalScoreOpponents: number;
+  status: 'win' | 'loss' | 'tie';
+  stake: number;
+  mode: 'classic' | 'private';
 }
 
 export const RANK_VALUES: Record<Rank, number> = {

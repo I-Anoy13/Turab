@@ -68,6 +68,9 @@
         "tableCode": { "type": "string" },
         "playerUids": { "type": "array", "items": { "type": "string" } },
         "mode": { "type": "string", "enum": ["classic", "private"] },
+        "finalScores": { "type": "object" },
+        "winnerTeam": { "type": "string", "enum": ["alpha", "beta", "tie"] },
+        "endedAt": { "type": "object" },
         "createdAt": { "type": "object" },
         "updatedAt": { "type": "object" }
       },
@@ -84,12 +87,32 @@
         "timestamp": { "type": "object" }
       },
       "required": ["senderId", "senderName", "text"]
+    },
+    "EventAnnouncement": {
+      "title": "EventAnnouncement",
+      "description": "Event crate announcement and drop pool details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "badge": { "type": "string" },
+        "description": { "type": "string" },
+        "crateName": { "type": "string" },
+        "crateCostCoins": { "type": "number" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["id", "title", "description", "crateCostCoins", "active"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": "UserProfile",
       "description": "User profile data"
+    },
+    "/events/{eventId}": {
+      "schema": "EventAnnouncement",
+      "description": "Live community and crate event announcements"
     },
     "/friend_requests/{requestId}": {
       "schema": "FriendRequest",

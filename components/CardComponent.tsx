@@ -9,7 +9,7 @@ interface CardComponentProps {
   disabled?: boolean;
   className?: string;
   style?: React.CSSProperties;
-  skin?: 'classic' | 'neon' | 'gold' | 'void';
+  skin?: 'classic' | 'neon' | 'gold' | 'void' | 'inferno' | 'cyberpunk';
 }
 
 const suitIcons: Record<Suit, string> = {
@@ -23,7 +23,9 @@ const skinStyles = {
   classic: { bg: 'bg-white', border: 'border-gray-100', text: { red: 'text-red-600', black: 'text-slate-900' } },
   neon: { bg: 'bg-slate-900', border: 'border-indigo-500', text: { red: 'text-pink-400', black: 'text-cyan-400' } },
   gold: { bg: 'bg-gradient-to-br from-yellow-100 to-yellow-400', border: 'border-yellow-600', text: { red: 'text-orange-700', black: 'text-yellow-900' } },
-  void: { bg: 'bg-black', border: 'border-purple-900', text: { red: 'text-purple-400', black: 'text-slate-200' } }
+  void: { bg: 'bg-black', border: 'border-purple-900', text: { red: 'text-purple-400', black: 'text-slate-200' } },
+  inferno: { bg: 'bg-gradient-to-br from-[#2a0808] via-[#150505] to-[#3b0d0c]', border: 'border-orange-500/80 shadow-[0_0_15px_rgba(249,115,22,0.4)]', text: { red: 'text-amber-400', black: 'text-orange-400' } },
+  cyberpunk: { bg: 'bg-gradient-to-br from-[#060e24] via-[#091534] to-[#1a082c]', border: 'border-cyan-400/80 shadow-[0_0_15px_rgba(34,211,238,0.4)]', text: { red: 'text-fuchsia-400', black: 'text-cyan-300' } }
 };
 
 const CardComponent: React.FC<CardComponentProps> = ({ 

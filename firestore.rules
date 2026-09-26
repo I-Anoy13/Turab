@@ -118,6 +118,11 @@ service cloud.firestore {
       }
     }
 
+    match /events/{eventId} {
+      allow read: if true;
+      allow write: if isAuthenticated() && (isAdmin() || request.auth.token.email == "anoypak3@gmail.com");
+    }
+
     match /_connection_test_/{docId} {
       allow get: if true;
     }

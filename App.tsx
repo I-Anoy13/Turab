@@ -6,7 +6,6 @@ import {
   GoogleAuthProvider, 
   FacebookAuthProvider, 
   signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
   onAuthStateChanged,
   signOut
 } from 'firebase/auth';
@@ -32,9 +31,13 @@ import {
 import { Peer } from 'peerjs';
 import { toast, Toaster } from 'sonner';
 import { auth, db } from './firebase';
-import { Card, GameState, Player, Suit, SUITS, RANKS, RANK_VALUES, UserProfile, AppView, GameMode, Friend, FriendRequest } from './types';
+import { Card, GameState, Player, Suit, SUITS, RANKS, RANK_VALUES, UserProfile, AppView, GameMode, Friend, FriendRequest, MatchHistoryEntry } from './types';
 import CardComponent from './components/CardComponent';
-import { Pencil, Clock, Camera } from 'lucide-react';
+import { Pencil, Clock, Camera, History, RefreshCw, Swords } from 'lucide-react';
+import { soundEffects } from './soundEffects';
+import VictoryCelebrationOverlay from './components/VictoryCelebrationOverlay';
+import { triggerVictoryConfetti } from './confettiCelebration';
+import EventsSection from './components/EventsSection';
 
 const INITIAL_COINS = 500;
 const STAKE_AMOUNT = 200;
@@ -446,6 +449,43 @@ const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isExitConfirmOpen, setIsExitConfirmOpen] = useState(false);
+  const [matchStartTime, setMatchStartTime] = useState<number | null>(null);
+  const [nowTick, setNowTick] = useState<number>(Date.now());
+  const [isSfxMuted, setIsSfxMuted] = useState(false);
+
+  // Track live timer tick for active game pre-leave window (2 minutes / 120 seconds)
+  useEffect(() => {
+    if (view !== 'game' || gameState?.roundStatus !== 'playing') {
+      return;
+    }
+    const timer = setInterval(() => {
+      setNowTick(Date.now());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [view, gameState?.roundStatus]);
+
+  useEffect(() => {
+    if (gameState?.roundStatus === 'playing') {
+      const serverStart = typeof gameState.gameStartedAt === 'number'
+        ? gameState.gameStartedAt
+        : (gameState.gameStartedAt?.toMillis ? gameState.gameStartedAt.toMillis() : null);
+      if (serverStart) {
+        setMatchStartTime(serverStart);
+      } else {
+        setMatchStartTime(prev => prev || Date.now());
+      }
+    } else {
+      setMatchStartTime(null);
+    }
+  }, [gameState?.roundStatus, gameState?.gameStartedAt]);
+
+  const matchElapsedSeconds = useMemo(() => {
+    if (!matchStartTime || gameState?.roundStatus !== 'playing') return 0;
+    return Math.max(0, Math.floor((nowTick - matchStartTime) / 1000));
+  }, [matchStartTime, gameState?.roundStatus, nowTick]);
+
+  const isPreLeaveGracePeriod = gameState?.roundStatus === 'lobby' || (gameState?.roundStatus === 'playing' && matchElapsedSeconds < 120);
+  const remainingPreLeaveSeconds = Math.max(0, 120 - matchElapsedSeconds);
   const [lobbyPlayerNames, setLobbyPlayerNames] = useState<Record<string, string>>({});
   const [lobbyPlayerAvatars, setLobbyPlayerAvatars] = useState<Record<string, string>>({});
   const [visualTrick, setVisualTrick] = useState<{ playerId: number; card: Card; signal?: "slow" | "spin" | "slam" | null }[]>([]);
@@ -483,14 +523,8 @@ const App: React.FC = () => {
   // Login State
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPass, setLoginPass] = useState('');
-  const [signupUsername, setSignupUsername] = useState('');
-  const signupUsernameRef = useRef('');
-  const [isSignUp, setIsSignUp] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
-
-  useEffect(() => {
-    signupUsernameRef.current = signupUsername;
-  }, [signupUsername]);
+  const [showExistingEmailLogin, setShowExistingEmailLogin] = useState(false);
 
   // Mic state
   const [isMicActive, setIsMicActive] = useState(false);
@@ -506,6 +540,11 @@ const App: React.FC = () => {
   const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
   const [newUsername, setNewUsername] = useState('');
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Match History State in Profile Area
+  const [isMatchHistoryOpen, setIsMatchHistoryOpen] = useState(false);
+  const [matchHistory, setMatchHistory] = useState<MatchHistoryEntry[]>([]);
+  const [isLoadingMatchHistory, setIsLoadingMatchHistory] = useState(false);
   
   // Sync Firebase Profile
   const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
@@ -661,6 +700,152 @@ const App: React.FC = () => {
       };
     }
   }, [view]);
+
+  // Parse a Firestore match document into a clean MatchHistoryEntry
+  const parseMatchEntry = useCallback((docId: string, data: any, currentUid: string, myUsername: string): MatchHistoryEntry => {
+    const players: Player[] = data.players || [];
+    
+    // Find player index in match
+    let myIndex = players.findIndex(p => p.uid === currentUid || (p.name && p.name.toLowerCase() === myUsername.toLowerCase()));
+    if (myIndex === -1) {
+      if (Array.isArray(data.playerUids) && data.playerUids.includes(currentUid)) {
+        myIndex = data.playerUids.indexOf(currentUid);
+      } else {
+        myIndex = 0;
+      }
+    }
+    
+    // In 4-player Turab, Team Alpha is players 0 and 2; Team Beta is players 1 and 3.
+    const isTeamAlpha = myIndex === 0 || myIndex === 2;
+    
+    let myTeamScore = 0;
+    let oppTeamScore = 0;
+    
+    if (data.finalScores && typeof data.finalScores.teamAlpha === 'number' && typeof data.finalScores.teamBeta === 'number') {
+      myTeamScore = isTeamAlpha ? data.finalScores.teamAlpha : data.finalScores.teamBeta;
+      oppTeamScore = isTeamAlpha ? data.finalScores.teamBeta : data.finalScores.teamAlpha;
+    } else {
+      const alphaScore = (players[0]?.score || 0) + (players[2]?.score || 0);
+      const betaScore = (players[1]?.score || 0) + (players[3]?.score || 0);
+      myTeamScore = isTeamAlpha ? alphaScore : betaScore;
+      oppTeamScore = isTeamAlpha ? betaScore : alphaScore;
+    }
+    
+    // Opponent names
+    const oppPlayers = isTeamAlpha ? [players[1], players[3]] : [players[0], players[2]];
+    const oppNames = oppPlayers
+      .map((p, idx) => p?.name || (isTeamAlpha ? (idx === 0 ? 'West AI' : 'East AI') : (idx === 0 ? 'South AI' : 'North AI')))
+      .filter(Boolean);
+    const opponentsDisplay = oppNames.join(' & ') || 'Opponents';
+
+    // Partner
+    const partner = isTeamAlpha ? players[2] : players[1];
+    const partnerName = partner?.name || (isTeamAlpha ? 'North AI' : 'West AI');
+    const myTeamDisplay = `${myUsername} & ${partnerName}`;
+
+    // Win / Loss / Tie Status
+    let status: 'win' | 'loss' | 'tie' = 'loss';
+    if (data.winnerTeam) {
+      if (data.winnerTeam === 'tie') {
+        status = 'tie';
+      } else {
+        const winningTeam = data.winnerTeam;
+        status = (isTeamAlpha && winningTeam === 'alpha') || (!isTeamAlpha && winningTeam === 'beta') ? 'win' : 'loss';
+      }
+    } else {
+      if (myTeamScore > oppTeamScore) status = 'win';
+      else if (myTeamScore === oppTeamScore && (myTeamScore > 0 || data.roundStatus === 'ended')) status = 'tie';
+      else status = 'loss';
+    }
+
+    // Format Date & Time
+    const timestampObj = data.endedAt || data.updatedAt || data.createdAt;
+    let formattedDate = 'Recent Game';
+    let rawDateNumber = 0;
+    if (timestampObj) {
+      if (typeof timestampObj.toMillis === 'function') {
+        rawDateNumber = timestampObj.toMillis();
+      } else if (timestampObj.seconds) {
+        rawDateNumber = timestampObj.seconds * 1000;
+      } else if (typeof timestampObj === 'number') {
+        rawDateNumber = timestampObj;
+      } else if (timestampObj instanceof Date) {
+        rawDateNumber = timestampObj.getTime();
+      }
+    }
+    if (rawDateNumber > 0) {
+      const d = new Date(rawDateNumber);
+      formattedDate = d.toLocaleDateString(undefined, { 
+        month: 'short', 
+        day: 'numeric', 
+        year: 'numeric' 
+      }) + ' • ' + d.toLocaleTimeString(undefined, { 
+        hour: '2-digit', 
+        minute: '2-digit' 
+      });
+    }
+
+    return {
+      id: docId,
+      date: formattedDate,
+      rawDate: rawDateNumber,
+      opponents: opponentsDisplay,
+      opponentList: oppNames,
+      myTeamNames: myTeamDisplay,
+      finalScoreMyTeam: myTeamScore,
+      finalScoreOpponents: oppTeamScore,
+      status,
+      stake: data.stake || STAKE_AMOUNT * 2,
+      mode: data.mode || 'classic'
+    };
+  }, []);
+
+  // Fetch last 10 games from the 'matches' collection in Firestore
+  const fetchMatchHistory = useCallback(async () => {
+    if (!auth.currentUser?.uid) return;
+    setIsLoadingMatchHistory(true);
+    const currentUid = auth.currentUser.uid;
+    const currentUsername = profile.username || 'You';
+
+    try {
+      let rawDocs: any[] = [];
+      try {
+        const q = query(
+          collection(db, 'matches'),
+          where('playerUids', 'array-contains', currentUid),
+          orderBy('updatedAt', 'desc'),
+          limit(10)
+        );
+        const snap = await getDocs(q);
+        rawDocs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      } catch (compoundErr) {
+        console.warn("Compound orderBy query failed (index building or unavailable), falling back to client sort:", compoundErr);
+        // Fallback without compound orderBy:
+        const fallbackQ = query(
+          collection(db, 'matches'),
+          where('playerUids', 'array-contains', currentUid),
+          limit(25)
+        );
+        const snap = await getDocs(fallbackQ);
+        rawDocs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        // Client-side sort by newest date
+        rawDocs.sort((a, b) => {
+          const tA = a.endedAt?.seconds || a.updatedAt?.seconds || a.createdAt?.seconds || 0;
+          const tB = b.endedAt?.seconds || b.updatedAt?.seconds || b.createdAt?.seconds || 0;
+          return tB - tA;
+        });
+        rawDocs = rawDocs.slice(0, 10);
+      }
+
+      const parsed = rawDocs.map(d => parseMatchEntry(d.id, d, currentUid, currentUsername));
+      setMatchHistory(parsed);
+    } catch (err) {
+      console.error("Failed to fetch match history from Firestore:", err);
+      handleFirestoreError(err, OperationType.LIST, 'matches');
+    } finally {
+      setIsLoadingMatchHistory(false);
+    }
+  }, [profile.username, parseMatchEntry]);
 
   const getUsernameCooldownInfo = useCallback(() => {
     if (!profile.usernameLastChangedAt) {
@@ -1240,12 +1425,11 @@ const App: React.FC = () => {
                   ...prev,
                   turab_id: user.uid,
                   gamerId: getNumericPlayerId(user.uid),
-                  username: signupUsernameRef.current || user.displayName || user.email?.split('@')[0] || 'Elite Player',
+                  username: user.displayName || user.email?.split('@')[0] || 'Elite Player',
                   role: user.email === 'anoypak3@gmail.com' ? 'admin' : 'user',
                   friends: []
                 };
                 syncProfileToCloud(newProfile);
-                setSignupUsername(''); 
                 return newProfile;
               });
             }
@@ -1270,13 +1454,14 @@ const App: React.FC = () => {
         };
 
         fetchProfile();
+        fetchMatchHistory();
       } else {
         setView('login');
         setIsAuthLoading(false);
       }
     });
     return () => unsubscribe();
-  }, [syncProfileToCloud]);
+  }, [syncProfileToCloud, fetchMatchHistory]);
 
   const handleLogin = async (method: 'google' | 'facebook' | 'email') => {
     setIsLoggingIn(true);
@@ -1284,19 +1469,31 @@ const App: React.FC = () => {
       if (method === 'google') {
         const provider = new GoogleAuthProvider();
         await signInWithPopup(auth, provider);
+        toast.success("Welcome! Verified with Google.");
       } else if (method === 'facebook') {
         const provider = new FacebookAuthProvider();
         await signInWithPopup(auth, provider);
+        toast.success("Welcome! Verified with Facebook.");
       } else if (method === 'email') {
-        if (isSignUp) {
-          await createUserWithEmailAndPassword(auth, loginEmail, loginPass);
-          toast.success("Account created successfully!");
-        } else {
+        try {
           await signInWithEmailAndPassword(auth, loginEmail, loginPass);
+          toast.success("Signed in successfully!");
+        } catch (emailErr: any) {
+          if (emailErr.code === 'auth/user-not-found' || emailErr.code === 'auth/invalid-credential') {
+            toast.error("Account not found. Direct email registration has been disabled. Please continue with Google or Facebook to create a verified account.");
+          } else {
+            toast.error(emailErr.message || "Failed to sign in.");
+          }
         }
       }
     } catch (err: any) {
-      toast.error(err.message || "Authentication failed.");
+      if (err.code === 'auth/popup-closed-by-user') {
+        toast.info("Sign-in cancelled.");
+      } else if (err.code === 'auth/popup-blocked') {
+        toast.error("Popup blocked by browser. Please allow popups or open in a new tab.");
+      } else {
+        toast.error(err.message || "Authentication failed.");
+      }
     } finally {
       setIsLoggingIn(false);
     }
@@ -1338,8 +1535,8 @@ const App: React.FC = () => {
 
   const isMyTurn = useMemo(() => {
     if (!gameState) return false;
-    return gameState.currentTurn === myPlayerId && !isProcessing && gameState.currentTrick.length < 4;
-  }, [gameState, myPlayerId, isProcessing]);
+    return gameState.currentTurn === myPlayerId && gameState.currentTrick.length < 4;
+  }, [gameState, myPlayerId]);
 
   const currentTrickWinnerId = useMemo(() => {
     if (!gameState || gameState.currentTrick.length === 0) return null;
@@ -1558,17 +1755,20 @@ const App: React.FC = () => {
 
       if (isWinner) {
         updatedWins += 1;
-        coinsEarned = gameState.stake; // Wins the entire pot or stake!
+        coinsEarned = gameState.stake || (STAKE_AMOUNT * 2); // Wins the 400 pot!
         xpEarned = 150; // Bonus XP for winning
-        toast.success(`VICTORY! You earned ${coinsEarned} coins & ${xpEarned} XP!`, { duration: 6000 });
+        triggerVictoryConfetti();
+        soundEffects.playVictoryFanfare();
+        toast.success(`VICTORY! You won ${coinsEarned} coins & ${xpEarned} XP! (+200 profit)`, { duration: 6000 });
       } else if (isTie) {
-        coinsEarned = Math.floor(gameState.stake / 2); // Split stake
+        coinsEarned = STAKE_AMOUNT; // 200 bet returned on tie
         xpEarned = 80;
-        toast.info(`SPLIT TIE! Stake split: ${coinsEarned} coins returned.`, { duration: 6000 });
+        toast.info(`SPLIT TIE! 200 bet returned.`, { duration: 6000 });
       } else {
         updatedLosses += 1;
+        coinsEarned = 0; // Lost 200 bet (already deducted from loser's account!)
         xpEarned = 40;
-        toast.error(`ROUND LOST! Keep practicing. Earned ${xpEarned} XP.`, { duration: 6000 });
+        toast.error(`ROUND LOST! -200 coins. Keep practicing! Earned ${xpEarned} XP.`, { duration: 6000 });
       }
 
       const nextXp = prev.xp + xpEarned;
@@ -1592,7 +1792,23 @@ const App: React.FC = () => {
       return updatedProfile;
     });
 
-  }, [gameState?.roundStatus, gameState?.id, myPlayerId, gameState?.stake, syncProfileToCloud]);
+    // Record final scores and match outcome in Firestore 'matches' collection
+    if (gameState?.id) {
+      updateDoc(doc(db, 'matches', gameState.id), {
+        roundStatus: 'ended',
+        endedAt: serverTimestamp(),
+        finalScores: {
+          teamAlpha: (gameState.players[0]?.score || 0) + (gameState.players[2]?.score || 0),
+          teamBeta: (gameState.players[1]?.score || 0) + (gameState.players[3]?.score || 0),
+        },
+        winnerTeam: isWinner ? (isMyTeamAlpha ? 'alpha' : 'beta') : (isTie ? 'tie' : (isMyTeamAlpha ? 'beta' : 'alpha')),
+        updatedAt: serverTimestamp()
+      }).then(() => {
+        fetchMatchHistory();
+      }).catch(err => console.warn("Failed to record match final summary in Firestore:", err));
+    }
+
+  }, [gameState?.roundStatus, gameState?.id, myPlayerId, gameState?.stake, syncProfileToCloud, fetchMatchHistory, gameState?.players]);
 
   const setupMatch = useCallback(async (code?: string, mode: 'classic' | 'private' = 'classic', partnerUid?: string) => {
     // Generate a 6-digit numeric code for private matches
@@ -1614,7 +1830,7 @@ const App: React.FC = () => {
       trumpSuit: null, trumpRevealedInTrick: null, 
       currentTurn: 0, leadSuit: null, roundStatus: 'lobby',
       history: ["Awaiting players..."],
-      lastWinner: null, stake: STAKE_AMOUNT * 4,
+      lastWinner: null, stake: STAKE_AMOUNT * 2,
       tableCode: mode === 'private' ? matchId : undefined,
       playerUids: [auth.currentUser!.uid],
       mode,
@@ -1650,10 +1866,24 @@ const App: React.FC = () => {
         setView('lobby');
         return;
       }
+
+      const isAdmin = profile.role === 'admin';
+      if (!isAdmin && profile.coins < STAKE_AMOUNT) {
+        return toast.error("Insufficient coins (need 200 to bet).");
+      }
+
+      const updatedProfile = { 
+        ...profile, 
+        coins: isAdmin ? profile.coins : profile.coins - STAKE_AMOUNT, 
+        gamesPlayed: profile.gamesPlayed + 1 
+      };
+      setProfile(updatedProfile);
+      syncProfileToCloud(updatedProfile).catch(console.warn);
+
       await updateDoc(matchRef, { playerUids: arrayUnion(auth.currentUser?.uid), updatedAt: serverTimestamp() });
       setGameState({ ...data, playerUids: [...data.playerUids, auth.currentUser!.uid] });
       setView('lobby');
-      toast.success("Joined table!");
+      toast.success("Joined table! (200 coins bet)");
     } catch (err) {
       toast.error("Failed to join table.");
     } finally {
@@ -1691,8 +1921,40 @@ const App: React.FC = () => {
 
     console.log(`🚪 [LEAVE_MATCH] Leaving match: ${matchId}`);
     
+    const wasPlaying = gameState.roundStatus === 'playing';
+    const isGrace = wasPlaying ? isPreLeaveGracePeriod : true;
+
     // Clear state IMMEDIATELY for responsive/instant UI reaction
     setGameState(null);
+    setMatchStartTime(null);
+
+    // Apply coin outcome:
+    if (profile.role !== 'admin') {
+      if (isGrace) {
+        // Safe pre-leave / within 2 minutes of game start: REFUND 200 COINS!
+        setProfile(p => {
+          const refunded = { 
+            ...p, 
+            coins: p.coins + STAKE_AMOUNT, 
+            gamesPlayed: Math.max(0, p.gamesPlayed - 1) 
+          };
+          syncProfileToCloud(refunded).catch(console.warn);
+          return refunded;
+        });
+        toast.success("Safe Pre-Leave: 200 coins refunded (within 2 mins)!");
+      } else {
+        // After 2 minutes of start game: COINS LOSE IS MANDATORY FOR LEAVING!
+        setProfile(p => {
+          const penalized = { 
+            ...p, 
+            losses: p.losses + 1 
+          };
+          syncProfileToCloud(penalized).catch(console.warn);
+          return penalized;
+        });
+        toast.error("Mandatory loss: 200 coins lost for leaving after 2 minutes.");
+      }
+    }
 
     // Fire-and-forget transaction in background
     (async () => {
@@ -1715,13 +1977,38 @@ const App: React.FC = () => {
               });
               console.log(`👥 Match ${matchId} membership updated. Remaining:`, remainingUids);
             }
+          } else if (data.roundStatus === 'playing') {
+            // Replace leaving player with AI so game continues smoothly for remaining players
+            const playerIndex = data.players.findIndex(p => p.uid === currentUid || p.name === profile.username);
+            let updatedPlayers = [...data.players];
+            if (playerIndex !== -1) {
+              updatedPlayers[playerIndex] = {
+                ...updatedPlayers[playerIndex],
+                name: `${updatedPlayers[playerIndex].name} (AI)`,
+                isAI: true
+              };
+            }
+            const remainingUids = data.playerUids.filter(uid => uid !== currentUid);
+            if (remainingUids.length === 0) {
+              transaction.update(matchRef, {
+                roundStatus: 'ended',
+                playerUids: [],
+                updatedAt: serverTimestamp()
+              });
+            } else {
+              transaction.update(matchRef, {
+                players: updatedPlayers,
+                playerUids: remainingUids,
+                updatedAt: serverTimestamp()
+              });
+            }
           }
         });
       } catch (err) {
         console.warn("Failed to clean up match membership on leave in background:", err);
       }
     })();
-  }, [gameState?.id]);
+  }, [gameState?.id, gameState?.roundStatus, isPreLeaveGracePeriod, profile.role, profile.username, syncProfileToCloud]);
 
   const startNewGame = useCallback(async (mode: GameMode, code?: string) => {
     const isAdmin = profile.role === 'admin';
@@ -1906,13 +2193,16 @@ const App: React.FC = () => {
           }
         }
 
+        const nowMs = Date.now();
         transaction.update(matchRef, { 
           players: updatedPlayers, 
           roundStatus: 'playing', 
+          gameStartedAt: nowMs,
           updatedAt: serverTimestamp() 
         });
       });
       
+      setMatchStartTime(Date.now());
       toast.success("Match Started!", { id: toastId });
       setView('game');
     } catch (err) {
@@ -1924,50 +2214,24 @@ const App: React.FC = () => {
     }
   }, [gameState?.id, lobbyPlayerNames, profile.username, setSafeProcessing]);
 
-  const playCardSound = useCallback(() => {
-    try {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const bufferSize = audioCtx.sampleRate * 0.05;
-      const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
-      const output = buffer.getChannelData(0);
-      for (let i = 0; i < bufferSize; i++) {
-        output[i] = Math.random() * 2 - 1;
-      }
-      
-      const whiteNoise = audioCtx.createBufferSource();
-      whiteNoise.buffer = buffer;
-      
-      const filter = audioCtx.createBiquadFilter();
-      filter.type = 'bandpass';
-      filter.frequency.setValueAtTime(1200, audioCtx.currentTime);
-      filter.Q.setValueAtTime(4, audioCtx.currentTime);
-      
-      const gainNode = audioCtx.createGain();
-      gainNode.gain.setValueAtTime(0.03, audioCtx.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.045);
-      
-      whiteNoise.connect(filter);
-      filter.connect(gainNode);
-      gainNode.connect(audioCtx.destination);
-      
-      whiteNoise.start();
-    } catch (err) {
-      const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/261/261-preview.mp3');
-      audio.volume = 0.05;
-      audio.play().catch(() => {});
-    }
+  const playCardSound = useCallback((signal?: 'slow' | 'spin' | 'slam' | null) => {
+    soundEffects.playCard(signal);
   }, []);
 
-  const playSweepSound = useCallback(() => {
-    const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2019/2019-preview.mp3');
-    audio.volume = 0.3;
-    audio.play().catch(() => {});
+  const playSweepSound = useCallback((isAce?: boolean, isMyWin?: boolean) => {
+    soundEffects.playTrickWin(isAce, isMyWin);
   }, []);
 
   const playShuffleSound = useCallback(() => {
-    const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/730/730-preview.mp3');
-    audio.volume = 0.35;
-    audio.play().catch(() => {});
+    soundEffects.playShuffle();
+  }, []);
+
+  const playDealSound = useCallback((cardIndex?: number) => {
+    soundEffects.playDeal(cardIndex);
+  }, []);
+
+  const playDealingSequence = useCallback((count?: number, intervalMs?: number) => {
+    soundEffects.playDealingSequence(count, intervalMs);
   }, []);
 
   useEffect(() => {
@@ -1987,19 +2251,30 @@ const App: React.FC = () => {
           if (newTrickLen > oldTrickLen) {
             const lastPlay = data.currentTrick[newTrickLen - 1];
             if (lastPlay && lastPlay.playerId !== myPlayerId) {
-              playCardSound();
+              playCardSound(lastPlay.signal);
             }
           } else if (newTrickLen === 0 && oldTrickLen >= 1) {
             // ONLY play sweep sound if a player got/won the pile (wonPile size increased!)
             const oldWonPileLen = prev.wonPile?.length || 0;
             const newWonPileLen = data.wonPile?.length || 0;
             if (newWonPileLen > oldWonPileLen) {
-              playSweepSound();
+              const lastTrickCard = prev.currentTrick?.[0]?.card;
+              const isAce = lastTrickCard?.rank === 'A';
+              const lastWinner = data.lastWinner;
+              const isMyWin = lastWinner !== null && (lastWinner === myPlayerId || (myPlayerId !== -1 && lastWinner % 2 === myPlayerId % 2));
+              playSweepSound(isAce, isMyWin);
             }
+          }
+
+          if (data.trumpSuit && data.trumpSuit !== prev.trumpSuit) {
+            soundEffects.playTrumpReveal();
           }
 
           if (newStatus === 'playing' && oldStatus === 'lobby') {
             playShuffleSound();
+            setTimeout(() => {
+              playDealingSequence(13, 70);
+            }, 550);
           }
         }
 
@@ -2045,13 +2320,7 @@ const App: React.FC = () => {
   const playCard = useCallback(async (playerId: number, card: Card) => {
     setHoveredCardKey(null);
     const currentGameState = gameStateRef.current;
-    if (!currentGameState || isProcessingRef.current || currentGameState.currentTrick.length >= 4 || currentGameState.currentTurn !== playerId) {
-      console.warn("⚠️ Play rejected: Turn lock or block active.", { 
-        hasGame: !!currentGameState, 
-        proc: isProcessingRef.current, 
-        trickFull: currentGameState ? currentGameState.currentTrick.length >= 4 : false,
-        notMyTurn: currentGameState ? currentGameState.currentTurn !== playerId : false
-      });
+    if (!currentGameState || currentGameState.currentTrick.length >= 4 || currentGameState.currentTurn !== playerId) {
       return;
     }
     if (currentGameState.leadSuit && card.suit !== currentGameState.leadSuit && currentGameState.players[playerId].hand.some(c => c.suit === currentGameState.leadSuit)) {
@@ -2059,7 +2328,6 @@ const App: React.FC = () => {
       return;
     }
     
-    setSafeProcessing(true);
     const matchRef = doc(db, 'matches', currentGameState.id);
 
     try {
@@ -2092,20 +2360,27 @@ const App: React.FC = () => {
         setSelectedSignal(null);
       }
 
-      await updateDoc(matchRef, { 
-        players: updatedPlayers, 
-        currentTrick: [...currentGameState.currentTrick, { playerId, card, signal: armedSignal }], 
-        leadSuit: currentGameState.leadSuit || card.suit, 
-        trumpSuit: newTrump, 
-        trumpRevealedInTrick: newTrumpRev, 
-        currentTurn: (currentGameState.currentTurn + 1) % 4,
-        updatedAt: serverTimestamp()
-      });
+      const nextTrick = [...currentGameState.currentTrick, { playerId, card, signal: armedSignal }];
+      const nextTurn = (currentGameState.currentTurn + 1) % 4;
 
-      playCardSound();
+      // INSTANT OPTIMISTIC UPDATE: 0ms card placement, sound and next turn!
+      const optimisticState: GameState = {
+        ...currentGameState,
+        players: updatedPlayers,
+        currentTrick: nextTrick,
+        leadSuit: currentGameState.leadSuit || card.suit,
+        trumpSuit: newTrump,
+        trumpRevealedInTrick: newTrumpRev,
+        currentTurn: nextTurn,
+      };
+
+      setGameState(optimisticState);
+      gameStateRef.current = optimisticState;
+      playCardSound(armedSignal);
 
       // Trigger side effects locally if it was trump reveal or trump shift
       if (newTrump !== currentGameState.trumpSuit) {
+        soundEffects.playTrumpReveal();
         const isChallenge = currentGameState.trumpSuit !== null;
         setTrumpAlert({ 
           suit: newTrump as Suit, 
@@ -2113,15 +2388,23 @@ const App: React.FC = () => {
           type: isChallenge ? 'challenged' : 'announced' 
         });
         setIsThunderActive(true);
-        setTimeout(() => { setIsThunderActive(false); setTrumpAlert(null); }, 2000);
+        setTimeout(() => { setIsThunderActive(false); setTrumpAlert(null); }, 1500);
       }
+
+      // Sync to cloud Firestore in background
+      await updateDoc(matchRef, { 
+        players: updatedPlayers, 
+        currentTrick: nextTrick, 
+        leadSuit: currentGameState.leadSuit || card.suit, 
+        trumpSuit: newTrump, 
+        trumpRevealedInTrick: newTrumpRev, 
+        currentTurn: nextTurn,
+        updatedAt: serverTimestamp()
+      });
     } catch (err: any) {
       console.error("Play Failed:", err);
-      toast.error("Sync error, try again.");
-    } finally {
-      setSafeProcessing(false);
     }
-  }, [setSafeProcessing, playCardSound, selectedSignal, myPlayerId]);
+  }, [playCardSound, selectedSignal, myPlayerId]);
 
   useEffect(() => {
     const currentGameState = gameState;
@@ -2138,23 +2421,19 @@ const App: React.FC = () => {
     if (!isHost) return;
     
     if (currentGameState.currentTrick.length >= 4) return;
-    if (isProcessing) return;
 
-    console.log(`🤖 AI Turn matching Host: Player ${currentTurn} (${activePlayer.name}) is playing...`);
-    
     const t = setTimeout(() => {
-      // Re-read current hand
       const p = currentGameState.players[currentTurn];
+      if (!p) return;
       const valid = currentGameState.leadSuit ? p.hand.filter(c => c.suit === currentGameState.leadSuit) : p.hand;
       const card = (valid.length > 0 ? valid : p.hand)[Math.floor(Math.random() * (valid.length || p.hand.length))];
       if (card) {
-        console.log(`🤖 AI playing card:`, card);
         playCard(p.id, card);
       }
-    }, 150); // Speed up AI to 150ms for extremely responsive and smooth gameplay transition without visual delay
+    }, 180); // Fast, natural 180ms cadence like a real person playing
     
     return () => clearTimeout(t);
-  }, [gameState?.currentTurn, gameState?.roundStatus, gameState?.currentTrick?.length, isProcessing, playCard]);
+  }, [gameState?.currentTurn, gameState?.roundStatus, gameState?.currentTrick?.length, playCard]);
 
   // Turn time countdown manager
   useEffect(() => {
@@ -2240,74 +2519,91 @@ const App: React.FC = () => {
     }
 
     activeTimeoutTrickIdRef.current = trickId;
-    console.log("🧩 [TRICK_RESOLVE] Initiating standard 1300ms timer for trick:", trickId);
+    console.log("🧩 [TRICK_RESOLVE] Initiating trick resolution:", trickId);
     
     if (activeTimeoutRef.current) clearTimeout(activeTimeoutRef.current);
     
     activeTimeoutRef.current = setTimeout(async () => {
       const currentGameState = gameStateRef.current;
       if (!currentGameState || currentGameState.currentTrick.length !== 4) {
-        console.log("🧩 [TRICK_RESOLVE] Aborting: Trick length changed before execution.");
         return;
       }
 
-      console.log("🧩 [TRICK_RESOLVE] Timeout executed. Setting safe processing...");
-      setSafeProcessing(true);
       resolvingTrickRef.current = trickId;
 
       try {
         const matchRef = doc(db, 'matches', currentGameState.id);
-        console.log("🧩 [TRICK_RESOLVE] Starting runTransaction...");
         await runTransaction(db, async (transaction) => {
-          console.log("🧩 [TRICK_RESOLVE] Reading match document in transaction...");
           const sfDoc = await transaction.get(matchRef);
           if (!sfDoc.exists()) {
-            throw new Error("Match document not found inside transaction!");
+            return;
           }
           const data = sfDoc.data() as GameState;
-          console.log("🧩 [TRICK_RESOLVE] Transaction loaded trick length:", data.currentTrick.length);
-          if (data.currentTrick.length !== 4) {
-            throw new Error(`Aborting: Trick length has changed inside transaction to ${data.currentTrick.length}`);
+
+          // If trick was already cleared or advanced by another event, exit cleanly
+          if (!data.currentTrick || data.currentTrick.length === 0) {
+            return;
           }
 
-          const winnerId = determineTrickWinner(data.currentTrick, data.leadSuit!, data.trumpSuit);
-          console.log("🧩 [TRICK_RESOLVE] Determined winnerIndex:", winnerId);
-          const winTeam = (winnerId === 0 || winnerId === 2) ? [0, 2] : [1, 3];
+          // Build the complete 4-card trick:
+          // If Firestore already has all 4 cards, use data.currentTrick.
+          // If the 4th card is still in flight to Firestore, combine the 3 server cards with the 4th card from local memory!
+          let fullTrick = data.currentTrick;
           let players = [...data.players];
-          let pile = [...data.pile, ...data.currentTrick.map(tr => tr.card)];
+
+          if (fullTrick.length === 3 && currentGameState.currentTrick.length === 4) {
+            const fourthPlay = currentGameState.currentTrick[3];
+            fullTrick = [...data.currentTrick, fourthPlay];
+            players = players.map(p => 
+              p.id === fourthPlay.playerId 
+                ? { ...p, hand: p.hand.filter(c => c.suit !== fourthPlay.card.suit || c.rank !== fourthPlay.card.rank) }
+                : p
+            );
+          } else if (fullTrick.length < 4 && currentGameState.currentTrick.length === 4) {
+            fullTrick = currentGameState.currentTrick;
+          }
+
+          if (fullTrick.length !== 4) {
+            console.log(`🧩 [TRICK_RESOLVE] Trick has ${fullTrick.length}/4 cards, awaiting completion.`);
+            return;
+          }
+
+          const leadSuit = data.leadSuit || currentGameState.leadSuit || fullTrick[0].card.suit;
+          const trumpSuit = data.trumpSuit !== undefined ? data.trumpSuit : currentGameState.trumpSuit;
+          const winnerId = determineTrickWinner(fullTrick, leadSuit, trumpSuit);
+
+          let pile = [...data.pile, ...fullTrick.map(tr => tr.card)];
           let wonPile = [...data.wonPile];
           const isLast = players.every(p => p.hand.length === 0);
 
           // If trump is revealed in the current trick, reset everyone's pre-trump consecutiveWins to 0
           const currentTrickIndex = Math.floor((data.wonPile.length + data.pile.length) / 4);
-          const isTrumpRevealedThisTrick = data.trumpRevealedInTrick === currentTrickIndex;
+          const isTrumpRevealedThisTrick = (data.trumpRevealedInTrick !== undefined ? data.trumpRevealedInTrick : currentGameState.trumpRevealedInTrick) === currentTrickIndex;
           if (isTrumpRevealedThisTrick) {
-            console.log("🧩 [TRICK_RESOLVE] Trump was revealed in this trick. Resetting all players' pre-trump consecutive wins.");
             players = players.map(p => ({ ...p, consecutiveWins: 0, lastWinWasAce: false }));
           }
 
-          const trickCardObj = data.currentTrick.find(tr => tr.playerId === winnerId);
+          const trickCardObj = fullTrick.find(tr => tr.playerId === winnerId);
           if (!trickCardObj) {
-            console.error("🧩 [TRICK_RESOLVE] Failed to find card for winnerId:", winnerId);
-            throw new Error(`Winner card not found for player: ${winnerId}`);
+            return;
           }
           const bestCard = trickCardObj.card;
           const isAce = bestCard.rank === 'A';
           const hasCons = players[winnerId].consecutiveWins >= 1;
-          
-          console.log("🧩 [TRICK_RESOLVE] Win status:", { isLast, bestCard, isAce, hasCons, trumpSuit: data.trumpSuit, isTrumpRevealedThisTrick });
 
-          if (isLast || (hasCons && data.trumpSuit && !(hasCons && players[winnerId].lastWinWasAce && isAce))) {
-            console.log("🧩 [TRICK_RESOLVE] Condition met, updating players with score:", pile.length);
+          if (isLast || (hasCons && trumpSuit && !(hasCons && players[winnerId].lastWinWasAce && isAce))) {
             players = players.map(p => p.id === winnerId ? { ...p, score: p.score + pile.length, consecutiveWins: 0, lastWinWasAce: false } : { ...p, consecutiveWins: 0, lastWinWasAce: false });
             wonPile = [...wonPile, ...pile];
             pile = [];
           } else {
-            console.log("🧩 [TRICK_RESOLVE] Incrementing consecutive win counters...");
             players = players.map(p => p.id === winnerId ? { ...p, consecutiveWins: p.consecutiveWins + 1, lastWinWasAce: isAce } : { ...p, consecutiveWins: 0, lastWinWasAce: false });
           }
 
-          console.log("🧩 [TRICK_RESOLVE] Applying transaction updates to doc...");
+          const isMyWin = winnerId === myPlayerId || (myPlayerId !== -1 && winnerId % 2 === myPlayerId % 2);
+          playSweepSound(isAce, isMyWin);
+
+          const nextStatus = wonPile.length === 52 ? 'ended' : 'playing';
+
           transaction.update(matchRef, { 
             players, 
             pile, 
@@ -2315,23 +2611,30 @@ const App: React.FC = () => {
             currentTrick: [], 
             leadSuit: null, 
             currentTurn: winnerId, 
-            roundStatus: wonPile.length === 52 ? 'ended' : 'playing', 
+            roundStatus: nextStatus, 
             updatedAt: serverTimestamp() 
           });
+
+          // Optimistically update local state immediately so next trick starts without waiting
+          setGameState(prev => prev ? ({
+            ...prev,
+            players,
+            pile,
+            wonPile,
+            currentTrick: [],
+            leadSuit: null,
+            currentTurn: winnerId,
+            roundStatus: nextStatus
+          }) : null);
         });
-        console.log("🧩 [TRICK_RESOLVE] Transaction committed successfully!");
-        // Persist trickId mapping is complete
         resolvingTrickRef.current = trickId;
       } catch (err) { 
-        console.error("🧩 [TRICK_RESOLVE] Transaction Error:", err);
-        // Reset so system can retry
+        console.warn("🧩 [TRICK_RESOLVE] Non-blocking transaction notice:", err);
         resolvingTrickRef.current = null;
       } finally { 
-        setSafeProcessing(false); 
         activeTimeoutTrickIdRef.current = null;
-        console.log("🧩 [TRICK_RESOLVE] Released transaction block.");
       }
-    }, 1300);
+    }, 550);
 
     return () => {
       // Clean up timeout if trick actually changes
@@ -2414,7 +2717,7 @@ const App: React.FC = () => {
         setVisualTrick([]);
         setWipingWinnerId(null);
         setWipingToPile(false);
-      }, 750);
+      }, 300);
 
       return () => clearTimeout(delayTimer);
     }
@@ -2606,8 +2909,13 @@ const App: React.FC = () => {
             </button>
 
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-indigo-500 to-transparent animate-shimmer"></div>
-            <div className="text-[8px] font-black text-indigo-400 uppercase tracking-[0.3em] mb-2">{gameState?.mode === 'private' ? 'Private Arena' : 'Public Arena'}</div>
-            <h2 className="text-3xl font-black mb-8">LOBBY</h2>
+            <div className="text-[8px] font-black text-indigo-400 uppercase tracking-[0.3em] mb-1">{gameState?.mode === 'private' ? 'Private Arena' : 'Public Arena'}</div>
+            <h2 className="text-3xl font-black mb-2">LOBBY</h2>
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-yellow-500/10 border border-yellow-500/20 text-yellow-300 text-[10px] font-black uppercase mb-6">
+              <span>Bet: 200 🪙</span>
+              <span className="text-white/30">•</span>
+              <span>Win Pot: 400 🪙</span>
+            </div>
             {gameState?.mode === 'private' && (
               <div className="bg-white/5 p-6 rounded-2xl border border-white/10 mb-8">
                 <div className="text-[8px] font-black text-white/20 uppercase mb-1">Table Code</div>
@@ -2772,61 +3080,103 @@ const App: React.FC = () => {
               className="glass-panel p-6 md:p-8 rounded-3xl md:rounded-[2.5rem] border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] relative group"
             >
               <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500/20 to-purple-500/20 rounded-[3rem] blur opacity-0 group-hover:opacity-100 transition duration-1000"></div>
-              <div className="relative">
-                <h2 className="text-xl font-black uppercase tracking-widest mb-8 text-white/80">
-                  {isSignUp ? 'Register for Gaming App' : 'Log In'}
-                </h2>
-                <div className="space-y-4">
-                  {isSignUp && (
-                    <input 
-                      type="text" 
-                      value={signupUsername}
-                      onChange={e => setSignupUsername(e.target.value)}
-                      placeholder="CHOOSE USERNAME" 
-                      className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-sm font-black outline-none focus:border-indigo-500/50 focus:bg-white/10 transition-all uppercase placeholder:text-white/20" 
-                    />
-                  )}
-                  <input 
-                    type="email" 
-                    value={loginEmail}
-                    onChange={e => setLoginEmail(e.target.value)}
-                    placeholder="EMAIL" 
-                    className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-sm font-black outline-none focus:border-indigo-500/50 focus:bg-white/10 transition-all uppercase placeholder:text-white/20" 
-                  />
-                  <input 
-                    type="password" 
-                    value={loginPass}
-                    onChange={e => setLoginPass(e.target.value)}
-                    placeholder="PASSWORD" 
-                    className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 text-sm font-black outline-none focus:border-indigo-500/50 focus:bg-white/10 transition-all uppercase placeholder:text-white/20" 
-                  />
+              <div className="relative space-y-6">
+                <div>
+                  <h2 className="text-xl font-black uppercase tracking-widest text-white/90">
+                    Player Access
+                  </h2>
+                  <p className="text-[11px] text-white/50 mt-1">
+                    Sign in with a verified account to ensure fair matchmaking, real rankings, and authentic player identity.
+                  </p>
+                </div>
+
+                <div className="space-y-3">
                   <motion.button 
+                    whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
-                    onClick={() => handleLogin('email')}
-                    disabled={!loginEmail || !loginPass || (isSignUp && !signupUsername) || isLoggingIn}
-                    className="gold-button w-full py-5 rounded-2xl text-lg mt-2 disabled:opacity-50 shadow-[0_10px_20px_rgba(251,191,36,0.2)]"
+                    onClick={() => handleLogin('google')}
+                    disabled={isLoggingIn}
+                    className="w-full bg-white hover:bg-slate-100 text-slate-900 rounded-2xl py-4 px-6 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-3 shadow-lg shadow-white/5 transition-all disabled:opacity-50"
                   >
-                    {isLoggingIn ? (isSignUp ? 'CREATING...' : 'LOGGING IN...') : (isSignUp ? 'REGISTER' : 'LOG IN')}
+                    <svg className="w-5 h-5" viewBox="0 0 24 24">
+                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+                    </svg>
+                    <span>Continue with Google</span>
+                    <span className="ml-auto text-[9px] bg-emerald-500/20 text-emerald-300 font-bold px-2 py-0.5 rounded-full border border-emerald-500/30">VERIFIED</span>
                   </motion.button>
-                  
-                  <div className="pt-4">
+
+                  <motion.button 
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => handleLogin('facebook')}
+                    disabled={isLoggingIn}
+                    className="w-full bg-[#1877F2] hover:bg-[#166fe5] text-white rounded-2xl py-4 px-6 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-3 shadow-lg shadow-blue-500/20 transition-all disabled:opacity-50"
+                  >
+                    <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
+                      <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+                    </svg>
+                    <span>Continue with Facebook</span>
+                    <span className="ml-auto text-[9px] bg-white/20 text-white font-bold px-2 py-0.5 rounded-full">VERIFIED</span>
+                  </motion.button>
+                </div>
+
+                {/* Security and Anti-Spam Notice */}
+                <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-3 text-center">
+                  <p className="text-[11px] text-amber-200/90 font-medium">
+                    🛡️ Direct email signup without verification has been removed to prevent fake accounts and OTP delivery issues.
+                  </p>
+                </div>
+
+                {/* Collapsible Existing Email Login */}
+                <div className="pt-2 border-t border-white/5">
+                  {!showExistingEmailLogin ? (
                     <button 
-                      onClick={() => setIsSignUp(!isSignUp)}
-                      className="text-[10px] font-black uppercase text-indigo-400 hover:text-white transition-colors"
+                      onClick={() => setShowExistingEmailLogin(true)}
+                      className="text-[11px] font-bold text-white/50 hover:text-white transition-colors flex items-center justify-center gap-1.5 mx-auto"
                     >
-                      {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
+                      Already have an existing email account? <span className="text-indigo-400 underline">Sign In</span>
                     </button>
-                  </div>
-
-                  <div className="relative py-4">
-                    <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-white/5"></div></div>
-                    <div className="relative flex justify-center text-[8px] font-black uppercase"><span className="bg-transparent px-2 text-white/20">OR CONTINUE WITH</span></div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <motion.button whileHover={{ y: -2 }} onClick={() => handleLogin('google')} className="bg-white text-black rounded-2xl py-4 font-black text-[10px] uppercase hover:bg-white/90 transition-colors">Google</motion.button>
-                    <motion.button whileHover={{ y: -2 }} onClick={() => handleLogin('facebook')} className="bg-[#1877F2] text-white rounded-2xl py-4 font-black text-[10px] uppercase hover:bg-[#1877F2]/90 transition-colors">Facebook</motion.button>
-                  </div>
+                  ) : (
+                    <div className="space-y-3 pt-2 text-left">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-black uppercase text-white/70">Sign In to Existing Account</span>
+                        <button 
+                          onClick={() => setShowExistingEmailLogin(false)}
+                          className="text-[10px] text-white/40 hover:text-white"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                      <input 
+                        type="email" 
+                        value={loginEmail}
+                        onChange={e => setLoginEmail(e.target.value)}
+                        placeholder="EXISTING ACCOUNT EMAIL" 
+                        className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-3 text-sm font-semibold outline-none focus:border-indigo-500/50 focus:bg-white/10 transition-all placeholder:text-white/20 text-white" 
+                      />
+                      <input 
+                        type="password" 
+                        value={loginPass}
+                        onChange={e => setLoginPass(e.target.value)}
+                        placeholder="PASSWORD" 
+                        className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-3 text-sm font-semibold outline-none focus:border-indigo-500/50 focus:bg-white/10 transition-all placeholder:text-white/20 text-white" 
+                      />
+                      <motion.button 
+                        whileTap={{ scale: 0.98 }}
+                        onClick={() => handleLogin('email')}
+                        disabled={!loginEmail || !loginPass || isLoggingIn}
+                        className="gold-button w-full py-3.5 rounded-2xl text-sm font-black disabled:opacity-50"
+                      >
+                        {isLoggingIn ? 'SIGNING IN...' : 'SIGN IN'}
+                      </motion.button>
+                      <p className="text-[10px] text-white/40 text-center">
+                        Note: New accounts must use verified Google or Facebook sign-in above.
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             </motion.div>
@@ -2956,45 +3306,109 @@ const App: React.FC = () => {
                     />
                   </div>
                 </div>
+
+                {/* Profile Match History Trigger */}
+                <div className="mt-3 pt-2 border-t border-white/10 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[7.5px] font-black uppercase tracking-wider text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded">
+                      {profile.wins}W
+                    </span>
+                    <span className="text-[7.5px] font-black uppercase tracking-wider text-rose-400 bg-rose-500/10 border border-rose-500/20 px-1.5 py-0.5 rounded">
+                      {profile.losses}L
+                    </span>
+                    <span className="text-[7px] font-mono text-white/40 uppercase">
+                      {Math.round((profile.wins / Math.max(1, profile.wins + profile.losses)) * 100)}% WR
+                    </span>
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsMatchHistoryOpen(true);
+                      fetchMatchHistory();
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/30 hover:border-indigo-400 text-[8px] font-black uppercase text-indigo-300 hover:text-white transition-all cursor-pointer active:scale-95 shadow-sm group/btn"
+                    title="View Last 10 Games from Firestore"
+                  >
+                    <History size={11} className="text-indigo-400 group-hover/btn:rotate-[-20deg] transition-transform" />
+                    <span>Match History</span>
+                  </button>
+                </div>
               </div>
             </motion.div>
 
-            <div className="space-y-4">
+            <div className="space-y-3">
+              {/* Event & Crate Announcement Banner Button */}
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => setView('events')}
+                className="w-full p-4 rounded-[2rem] bg-gradient-to-r from-orange-600 via-amber-600 to-purple-600 border border-orange-400/50 shadow-[0_10px_25px_rgba(249,115,22,0.35)] flex items-center justify-between text-left group transition-all cursor-pointer"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-black/40 border border-white/20 flex items-center justify-center text-xl animate-bounce">
+                    🎁
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[7.5px] font-black uppercase tracking-widest bg-black/40 px-2 py-0.5 rounded-full text-amber-300 border border-amber-400/30">
+                        2% CARD SKINS EVENT
+                      </span>
+                    </div>
+                    <div className="text-sm font-black uppercase text-white tracking-wide mt-0.5 group-hover:text-amber-200 transition-colors">
+                      Events & Crates
+                    </div>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-[8px] font-mono text-white/60 uppercase">Open & Craft</div>
+                  <div className="text-xs font-black text-amber-300 flex items-center justify-end gap-1">
+                    <span>200 🪙</span>
+                    <span className="text-white/40">/</span>
+                    <span>1 🎟️</span>
+                  </div>
+                </div>
+              </motion.button>
+
               <motion.button 
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={() => startNewGame('classic')} 
-                className="gold-button w-full py-7 rounded-[2rem] text-2xl shadow-[0_15px_30px_rgba(217,119,6,0.3)] transition-all"
+                className="gold-button w-full py-6 rounded-[2rem] text-2xl shadow-[0_15px_30px_rgba(217,119,6,0.3)] transition-all"
               >
                 Play Now
               </motion.button>
               
-              <div className="grid grid-cols-2 gap-4">
-                <motion.button whileHover={{ y: -2 }} onClick={() => startNewGame('private')} className="glass-panel py-5 rounded-2xl text-[10px] font-black uppercase border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10 transition-all">
+              <div className="grid grid-cols-2 gap-3">
+                <motion.button whileHover={{ y: -2 }} onClick={() => startNewGame('private')} className="glass-panel py-4 rounded-2xl text-[10px] font-black uppercase border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10 transition-all">
                   Create Table
                 </motion.button>
-                <motion.button whileHover={{ y: -2 }} onClick={() => setIsJoinModalOpen(true)} className="glass-panel py-5 rounded-2xl text-[10px] font-black uppercase border-white/10 hover:bg-white/5 transition-all">
+                <motion.button whileHover={{ y: -2 }} onClick={() => setIsJoinModalOpen(true)} className="glass-panel py-4 rounded-2xl text-[10px] font-black uppercase border-white/10 hover:bg-white/5 transition-all">
                   Join Table
                 </motion.button>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <motion.button whileHover={{ y: -2 }} onClick={() => setIsFriendsOpen(true)} className="glass-panel py-5 rounded-2xl text-[10px] font-black uppercase border-white/10 hover:bg-white/5 transition-all">
-                  Friends
+              <div className="grid grid-cols-2 gap-3">
+                <motion.button whileHover={{ y: -2 }} onClick={() => { setIsMatchHistoryOpen(true); fetchMatchHistory(); }} className="glass-panel py-3.5 rounded-2xl text-[10px] font-black uppercase border-indigo-500/30 text-indigo-300 hover:bg-indigo-500/10 hover:border-indigo-400/50 transition-all flex items-center justify-center gap-1.5">
+                  <History size={13} className="text-indigo-400" />
+                  <span>Match History</span>
                 </motion.button>
-                <motion.button whileHover={{ y: -2 }} onClick={() => { setTutorialPage(0); setIsTutorialOpen(true); }} className="glass-panel py-5 rounded-2xl text-[10px] font-black uppercase border-white/10 hover:bg-white/5 transition-all text-yellow-500 hover:border-yellow-500/20">
-                  How To Play 📖
+                <motion.button whileHover={{ y: -2 }} onClick={() => setIsFriendsOpen(true)} className="glass-panel py-3.5 rounded-2xl text-[10px] font-black uppercase border-white/10 hover:bg-white/5 transition-all">
+                  Friends
                 </motion.button>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <motion.button whileHover={{ opacity: 1 }} onClick={watchAd} className="py-4 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 text-[10px] font-black uppercase text-indigo-400/60 hover:text-indigo-400 hover:bg-indigo-600/20 transition-all">
+              <div className="grid grid-cols-2 gap-3">
+                <motion.button whileHover={{ y: -2 }} onClick={() => { setTutorialPage(0); setIsTutorialOpen(true); }} className="glass-panel py-3.5 rounded-2xl text-[10px] font-black uppercase border-white/10 hover:bg-white/5 transition-all text-yellow-500 hover:border-yellow-500/20">
+                  How To Play 📖
+                </motion.button>
+                <motion.button whileHover={{ opacity: 1 }} onClick={watchAd} className="py-3.5 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 text-[10px] font-black uppercase text-indigo-400/60 hover:text-indigo-400 hover:bg-indigo-600/20 transition-all">
                   📺 Free Coins
                 </motion.button>
-                <motion.button whileHover={{ opacity: 1 }} onClick={handleLogout} className="py-4 rounded-2xl bg-red-600/10 border border-red-500/20 text-[10px] font-black uppercase text-red-400/60 hover:text-red-400 hover:bg-red-600/20 transition-all">
-                  📤 Logout
-                </motion.button>
               </div>
+
+              <motion.button whileHover={{ opacity: 1 }} onClick={handleLogout} className="w-full py-3 rounded-2xl bg-red-600/10 border border-red-500/20 text-[10px] font-black uppercase text-red-400/60 hover:text-red-400 hover:bg-red-600/20 transition-all">
+                📤 Logout
+              </motion.button>
             </div>
           </motion.div>
 
@@ -3302,6 +3716,17 @@ const App: React.FC = () => {
       );
     }
 
+    if (view === 'events') {
+      return (
+        <EventsSection
+          profile={profile}
+          setProfile={setProfile}
+          syncProfileToCloud={syncProfileToCloud}
+          onBack={() => setView('home')}
+        />
+      );
+    }
+
     if (!gameState) {
       return (
         <div className="h-full w-full flex flex-col items-center justify-center bg-transparent p-8">
@@ -3337,10 +3762,44 @@ const App: React.FC = () => {
         <div className="absolute top-0 left-0 p-4 md:p-6 z-[150] flex flex-col gap-3 items-start">
           <div className="flex gap-2">
             <button onClick={() => setIsExitConfirmOpen(true)} className="glass-panel w-10 h-10 rounded-full flex items-center justify-center">←</button>
-            <div className="glass-panel p-2 px-5 rounded-xl border-white/10">
+            <div className="glass-panel p-2 px-4 rounded-xl border-white/10">
               <div className="text-[8px] font-black text-indigo-400 uppercase">TEAM ALPHA</div>
-              <div className="text-xl font-black">{teamAlphaScore}</div>
+              <div className="text-lg font-black">{teamAlphaScore}</div>
             </div>
+            <div className="glass-panel p-2 px-3 rounded-xl border-yellow-500/20 bg-yellow-500/5 flex flex-col justify-center">
+              <div className="text-[7.5px] font-black text-yellow-400 uppercase tracking-wider">POT</div>
+              <div className="text-sm font-black text-yellow-300 flex items-center gap-0.5 leading-none mt-0.5">
+                {gameState.stake || 400} <span className="text-[8px]">🪙</span>
+              </div>
+            </div>
+            {isPreLeaveGracePeriod ? (
+              <div 
+                onClick={() => setIsExitConfirmOpen(true)}
+                className="glass-panel p-2 px-3 rounded-xl border-emerald-500/30 bg-emerald-500/10 flex flex-col justify-center cursor-pointer hover:bg-emerald-500/20 transition-all group"
+                title="Safe Pre-Leave: Leave within 2 minutes for 100% coins refund"
+              >
+                <div className="text-[7.5px] font-black text-emerald-400 uppercase tracking-wider flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  PRE-LEAVE
+                </div>
+                <div className="text-xs font-mono font-black text-emerald-300 leading-none mt-0.5">
+                  {Math.floor(remainingPreLeaveSeconds / 60)}:{(remainingPreLeaveSeconds % 60).toString().padStart(2, '0')}
+                </div>
+              </div>
+            ) : (
+              <div 
+                onClick={() => setIsExitConfirmOpen(true)}
+                className="glass-panel p-2 px-3 rounded-xl border-rose-500/20 bg-rose-500/5 flex flex-col justify-center cursor-pointer hover:bg-rose-500/10 transition-all opacity-85"
+                title="Mandatory Loss: Leaving now forfeits 200 coins"
+              >
+                <div className="text-[7.5px] font-black text-rose-400 uppercase tracking-wider flex items-center gap-1">
+                  FORFEIT
+                </div>
+                <div className="text-[10px] font-mono font-black text-rose-400 leading-none mt-0.5">
+                  -200 🪙
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -3351,6 +3810,19 @@ const App: React.FC = () => {
               <span className="text-[8px] font-black uppercase text-white/60">TRUMP</span>
             </div>
           )}
+          <button 
+            onClick={() => {
+              const nextMuted = !isSfxMuted;
+              setIsSfxMuted(nextMuted);
+              soundEffects.setMuted(nextMuted);
+              if (!nextMuted) soundEffects.playCard();
+              toast.info(nextMuted ? "Sound effects muted" : "Sound effects enabled");
+            }} 
+            className={`glass-panel w-10 h-10 rounded-full flex items-center justify-center transition-all ${isSfxMuted ? 'text-white/30 border-white/5' : 'text-yellow-400 border-yellow-500/30 bg-yellow-500/10 shadow-[0_0_12px_rgba(234,179,8,0.2)]'}`}
+            title={isSfxMuted ? "Unmute Card Sound Effects" : "Mute Card Sound Effects"}
+          >
+            {isSfxMuted ? '🔇' : '🎵'}
+          </button>
           <button onClick={toggleMic} className={`glass-panel w-10 h-10 rounded-full flex items-center justify-center transition-all ${isMicActive ? 'mic-active' : 'text-white/50'}`}>
             {isMicActive ? '🎤' : '🎙️'}
           </button>
@@ -3780,7 +4252,7 @@ const App: React.FC = () => {
                 popupOffset = isMobile ? -30 : -45; // Normal pop for the suit/lead group
               }
 
-              const handleCardPlay = (e?: React.MouseEvent) => {
+              const handleCardPlay = (e?: React.MouseEvent | React.TouchEvent) => {
                 if (e) {
                   e.preventDefault();
                   e.stopPropagation();
@@ -3792,11 +4264,17 @@ const App: React.FC = () => {
               return (
                 <div 
                   key={cardKey} 
-                  className="wing-card"
+                  className="wing-card cursor-pointer"
                   data-card-key={cardKey}
-                  onMouseEnter={() => { if (!isTouchDevice) setHoveredCardKey(cardKey); }}
+                  onMouseEnter={() => { 
+                    if (!isTouchDevice) { 
+                      setHoveredCardKey(cardKey); 
+                      soundEffects.playCardHover(); 
+                    } 
+                  }}
                   onMouseLeave={() => { if (!isTouchDevice) setHoveredCardKey(null); }}
                   onTouchStart={() => { if (isTouchDevice) setHoveredCardKey(cardKey); }}
+                  onClick={handleCardPlay}
                   style={{
                     transform: `translate(${x}px, ${y + popupOffset}px) rotate(${angle}deg)`,
                     zIndex: isCardHovered ? 3000 : ((isSuitHovered || isLeadSuitPop) ? 2000 : idx)
@@ -3805,7 +4283,7 @@ const App: React.FC = () => {
                   <CardComponent 
                     card={card} 
                     skin={profile.activeSkin} 
-                    onClick={!isTouchDevice ? handleCardPlay : undefined}
+                    onClick={handleCardPlay}
                     disabled={!isSelectable && isMyTurn} 
                     className={`${isMobile ? "scale-[0.75]" : ""} ${isTrump ? 'ring-2 ring-indigo-400 shadow-[0_0_15px_rgba(99,102,241,0.6)]' : ''}`}
                   />
@@ -3959,34 +4437,65 @@ const App: React.FC = () => {
           const isTie = myTeamScore === opponentTeamScore;
 
           return (
-            <div className="fixed inset-0 bg-black/95 z-[5000] flex flex-col items-center justify-center p-8 backdrop-blur-3xl text-center">
-              <div className={`text-6xl md:text-8xl font-black uppercase mb-4 tracking-tighter ${hasWon ? 'text-green-500' : isTie ? 'text-yellow-500' : 'text-red-500'}`}>
-                {hasWon ? 'ROUND WON' : isTie ? 'ROUND TIED' : 'ROUND LOST'}
-              </div>
-              <h2 className="text-2xl turab-title font-black italic mb-12 opacity-40">MATCH OVER</h2>
-              
-              <div className="glass-panel p-8 rounded-3xl border-white/10 mb-8 max-w-sm w-full">
-                <div className="flex justify-between mb-4">
-                  <span className="text-white/40 font-black uppercase text-xs">Your Team (Cards Won)</span>
-                  <span className={`text-2xl font-black ${hasWon ? 'text-green-400' : 'text-white'}`}>{myTeamScore}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-white/40 font-black uppercase text-xs">Opponents (Cards Won)</span>
-                  <span className={`text-2xl font-black ${!hasWon && !isTie ? 'text-red-400' : 'text-white'}`}>{opponentTeamScore}</span>
-                </div>
-                <div className="mt-6 text-[10px] font-black tracking-widest text-white/30 uppercase border-t border-white/5 pt-4">
-                  {hasWon 
-                    ? `🏆 WINNER: You collected ${myTeamScore} cards!` 
-                    : isTie 
-                      ? '🤝 TIE: Equal split of 26 cards each!' 
-                      : `Opponents won with ${opponentTeamScore} cards!`
-                  }
-                </div>
-              </div>
+            <div className="fixed inset-0 bg-black/95 z-[5000] flex flex-col items-center justify-center p-8 backdrop-blur-3xl text-center relative overflow-hidden">
+              {/* Confetti & Celebratory Particle Overlay on Round Win */}
+              {hasWon && (
+                <VictoryCelebrationOverlay 
+                  coinsWon={gameState.stake || 400} 
+                  xpWon={150} 
+                />
+              )}
 
-              <div className="w-full max-w-sm space-y-4">
-                <button onClick={() => startNewGame('classic')} className="gold-button w-full py-6 rounded-3xl text-xl">Play Again</button>
-                <button onClick={() => setView('home')} className="w-full py-5 bg-white/5 border border-white/10 rounded-3xl text-xs font-black uppercase text-white/40">Back to Lobby</button>
+              <div className="relative z-10 flex flex-col items-center max-w-sm w-full">
+                <div className={`text-5xl md:text-7xl font-black uppercase mb-2 tracking-tighter ${
+                  hasWon 
+                    ? 'text-transparent bg-clip-text bg-gradient-to-r from-amber-300 via-emerald-400 to-yellow-200 filter drop-shadow-[0_0_25px_rgba(245,158,11,0.5)]' 
+                    : isTie 
+                      ? 'text-yellow-400' 
+                      : 'text-red-500'
+                }`}>
+                  {hasWon ? 'VICTORY!' : isTie ? 'ROUND TIED' : 'ROUND LOST'}
+                </div>
+
+                {hasWon && (
+                  <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-black uppercase mb-4 shadow-[0_0_20px_rgba(245,158,11,0.3)] animate-bounce">
+                    <span>👑 CHAMPION</span>
+                    <span className="text-white/30">•</span>
+                    <span>+{gameState.stake || 400} 🪙 POT</span>
+                    <span className="text-white/30">•</span>
+                    <span>+150 XP</span>
+                  </div>
+                )}
+
+                <h2 className="text-xl turab-title font-black italic mb-6 opacity-40">MATCH OVER</h2>
+                
+                <div className={`glass-panel p-8 rounded-3xl border mb-8 w-full ${
+                  hasWon 
+                    ? 'border-amber-500/30 bg-amber-950/20 shadow-[0_0_30px_rgba(245,158,11,0.15)]' 
+                    : 'border-white/10'
+                }`}>
+                  <div className="flex justify-between mb-4">
+                    <span className="text-white/40 font-black uppercase text-xs">Your Team (Cards Won)</span>
+                    <span className={`text-2xl font-black ${hasWon ? 'text-emerald-400' : 'text-white'}`}>{myTeamScore}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-white/40 font-black uppercase text-xs">Opponents (Cards Won)</span>
+                    <span className={`text-2xl font-black ${!hasWon && !isTie ? 'text-red-400' : 'text-white'}`}>{opponentTeamScore}</span>
+                  </div>
+                  <div className="mt-6 text-[10px] font-black tracking-widest text-white/30 uppercase border-t border-white/5 pt-4">
+                    {hasWon 
+                      ? `🏆 CHAMPIONS: Your team gathered ${myTeamScore} cards!` 
+                      : isTie 
+                        ? '🤝 TIE: Equal split of 26 cards each!' 
+                        : `Opponents won with ${opponentTeamScore} cards!`
+                    }
+                  </div>
+                </div>
+
+                <div className="w-full space-y-4">
+                  <button onClick={() => startNewGame('classic')} className="gold-button w-full py-6 rounded-3xl text-xl shadow-[0_0_25px_rgba(245,158,11,0.4)]">Play Again</button>
+                  <button onClick={() => setView('home')} className="w-full py-5 bg-white/5 border border-white/10 rounded-3xl text-xs font-black uppercase text-white/40 hover:bg-white/10 transition-colors">Back to Lobby</button>
+                </div>
               </div>
             </div>
           );
@@ -4286,16 +4795,48 @@ const App: React.FC = () => {
                 initial={{ scale: 0.9, opacity: 0, y: 20 }}
                 animate={{ scale: 1, opacity: 1, y: 0 }}
                 exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                className="relative w-full max-w-sm glass-panel p-8 rounded-[2.5rem] border-2 border-rose-500/30 bg-black/95 shadow-[-10px_20px_50px_rgba(0,0,0,0.8)] z-[5101] text-center mx-4"
+                className={`relative w-full max-w-sm glass-panel p-8 rounded-[2.5rem] border-2 ${
+                  isPreLeaveGracePeriod ? 'border-emerald-500/40' : 'border-rose-500/40'
+                } bg-black/95 shadow-[-10px_20px_50px_rgba(0,0,0,0.8)] z-[5101] text-center mx-4`}
               >
-                <div className="w-16 h-16 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-3xl mx-auto mb-6 animate-pulse">
-                  ⚠️
+                <div className={`w-16 h-16 rounded-full ${
+                  isPreLeaveGracePeriod ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                } border flex items-center justify-center text-3xl mx-auto mb-4 animate-pulse`}>
+                  {isPreLeaveGracePeriod ? '🛡️' : '⚠️'}
                 </div>
-                <h2 className="text-xl font-black uppercase tracking-widest mb-2 text-rose-400">
-                  SURE TO LEAVE ARENA?
+
+                {/* Pre-leave status badge */}
+                {gameState?.roundStatus === 'playing' && (
+                  <div className="mb-3">
+                    {isPreLeaveGracePeriod ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-[10px] font-black uppercase tracking-wider">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                        SAFE PRE-LEAVE • {Math.floor(remainingPreLeaveSeconds / 60)}:{(remainingPreLeaveSeconds % 60).toString().padStart(2, '0')} LEFT
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/10 border border-rose-500/30 text-rose-300 text-[10px] font-black uppercase tracking-wider">
+                        2-MIN PRE-LEAVE EXPIRED
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                <h2 className={`text-xl font-black uppercase tracking-widest mb-2 ${
+                  isPreLeaveGracePeriod ? 'text-emerald-400' : 'text-rose-400'
+                }`}>
+                  {gameState?.roundStatus === 'lobby' 
+                    ? 'LEAVE LOBBY?' 
+                    : isPreLeaveGracePeriod 
+                      ? 'SAFE PRE-LEAVE?' 
+                      : 'MANDATORY COINS LOSS'}
                 </h2>
+                
                 <p className="text-[10px] font-bold text-white/50 uppercase mb-8 leading-relaxed px-2">
-                  Leaving an active arena match will result in an automatic forfeit and refund loss of stake! Are you sure you want to exit?
+                  {gameState?.roundStatus === 'lobby'
+                    ? 'Leaving the lobby will cancel search and refund your 200 coins bet in full.'
+                    : isPreLeaveGracePeriod
+                      ? 'You are within the 2-minute pre-leave window! If you leave now, your 200 coins bet will be fully refunded to your account.'
+                      : 'The 2-minute pre-leave period has ended! Leaving now will result in an automatic forfeit and MANDATORY LOSS of your 200 coins bet!'}
                 </p>
 
                 <div className="grid grid-cols-2 gap-4">
@@ -4310,11 +4851,258 @@ const App: React.FC = () => {
                       setIsExitConfirmOpen(false);
                       await leaveCurrentMatch();
                       setView('home');
-                      toast.success("Left the game table.");
                     }}
-                    className="py-4 rounded-xl bg-rose-600 border border-rose-500/30 hover:bg-rose-500 text-[10px] uppercase font-black text-white tracking-widest hover:shadow-[0_0_20px_rgba(239,68,68,0.4)] transition-all"
+                    className={`py-4 rounded-xl border text-[10px] uppercase font-black text-white tracking-widest transition-all ${
+                      isPreLeaveGracePeriod
+                        ? 'bg-emerald-600 border-emerald-500/30 hover:bg-emerald-500 hover:shadow-[0_0_20px_rgba(16,185,129,0.4)]'
+                        : 'bg-rose-600 border-rose-500/30 hover:bg-rose-500 hover:shadow-[0_0_20px_rgba(239,68,68,0.4)]'
+                    }`}
                   >
-                    YES, SURRENDER
+                    {isPreLeaveGracePeriod ? 'LEAVE & REFUND 200 🪙' : 'FORFEIT & LOSE 200 🪙'}
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Profile Area: Match History Modal */}
+        <AnimatePresence>
+          {isMatchHistoryOpen && (
+            <motion.div
+              id="match-history-modal"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 flex items-center justify-center z-[5200] p-4 select-none"
+            >
+              <div
+                onClick={() => setIsMatchHistoryOpen(false)}
+                className="absolute inset-0 bg-black/85 backdrop-blur-md"
+              />
+
+              <motion.div
+                initial={{ scale: 0.92, opacity: 0, y: 20 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.92, opacity: 0, y: 20 }}
+                transition={{ type: 'spring', damping: 25, stiffness: 280 }}
+                className="relative w-full max-w-lg glass-panel p-6 md:p-8 rounded-[2.5rem] border border-white/20 shadow-2xl z-[5201] flex flex-col max-h-[88vh] overflow-hidden"
+              >
+                {/* Header */}
+                <div className="flex items-start justify-between pb-4 border-b border-white/10 mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-2xl shadow-inner text-indigo-300">
+                      📜
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-xl md:text-2xl font-black uppercase tracking-wider text-white">
+                          Match History
+                        </h2>
+                        <span className="text-[8.5px] font-black uppercase tracking-widest px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                          Last 10 Games
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-white/50 font-mono mt-0.5">
+                        Profile archive • Fetched live from Firestore 'matches'
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => fetchMatchHistory()}
+                      disabled={isLoadingMatchHistory}
+                      className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-indigo-400/40 text-indigo-300 transition-all cursor-pointer active:scale-95 disabled:opacity-50"
+                      title="Refresh from Firestore"
+                    >
+                      <RefreshCw size={15} className={isLoadingMatchHistory ? "animate-spin text-amber-400" : ""} />
+                    </button>
+                    <button
+                      onClick={() => setIsMatchHistoryOpen(false)}
+                      className="w-9 h-9 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center text-xs font-black text-white/60 hover:text-white transition-all cursor-pointer active:scale-95"
+                      title="Close"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                {/* Profile Stats Quick Bar */}
+                <div className="grid grid-cols-4 gap-2 mb-4 p-3 rounded-2xl bg-white/[0.03] border border-white/5 text-center">
+                  <div className="flex flex-col">
+                    <span className="text-[7.5px] font-black uppercase text-white/40 tracking-wider">Total Games</span>
+                    <span className="text-sm font-black text-white">{profile.gamesPlayed || (profile.wins + profile.losses)}</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[7.5px] font-black uppercase text-emerald-400/70 tracking-wider">Victories</span>
+                    <span className="text-sm font-black text-emerald-400">{profile.wins}</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[7.5px] font-black uppercase text-rose-400/70 tracking-wider">Defeats</span>
+                    <span className="text-sm font-black text-rose-400">{profile.losses}</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[7.5px] font-black uppercase text-indigo-400/70 tracking-wider">Win Rate</span>
+                    <span className="text-sm font-black text-indigo-400 font-mono">
+                      {Math.round((profile.wins / Math.max(1, profile.wins + profile.losses)) * 100)}%
+                    </span>
+                  </div>
+                </div>
+
+                {/* Games List (Scrollable) */}
+                <div className="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar">
+                  {isLoadingMatchHistory && matchHistory.length === 0 ? (
+                    <div className="space-y-3 py-4">
+                      {[1, 2, 3].map((i) => (
+                        <div key={i} className="p-4 rounded-2xl bg-white/[0.02] border border-white/5 animate-pulse space-y-2">
+                          <div className="flex justify-between items-center">
+                            <div className="h-4 w-24 bg-white/10 rounded"></div>
+                            <div className="h-4 w-16 bg-white/10 rounded-full"></div>
+                          </div>
+                          <div className="h-3 w-40 bg-white/5 rounded"></div>
+                          <div className="h-6 w-full bg-white/5 rounded-xl"></div>
+                        </div>
+                      ))}
+                      <div className="text-center text-[10px] font-mono text-indigo-400 uppercase tracking-widest animate-pulse mt-2">
+                        Querying Firestore 'matches' collection...
+                      </div>
+                    </div>
+                  ) : matchHistory.length === 0 ? (
+                    <div className="py-10 px-4 text-center flex flex-col items-center justify-center">
+                      <div className="w-16 h-16 rounded-3xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-3xl mb-3 shadow-[0_0_30px_rgba(245,158,11,0.15)]">
+                        ⚔️
+                      </div>
+                      <h3 className="text-base font-black uppercase tracking-wider text-white">
+                        No Recent Matches Found
+                      </h3>
+                      <p className="text-xs text-white/50 max-w-xs mt-1 leading-relaxed">
+                        Play a Classic or Private battle to log your first match with final scores and opponent telemetry!
+                      </p>
+                      <div className="mt-5 flex items-center justify-center">
+                        <button
+                          onClick={() => {
+                            setIsMatchHistoryOpen(false);
+                            startNewGame('classic');
+                          }}
+                          className="gold-button px-6 py-2.5 rounded-xl text-xs font-black uppercase shadow-lg cursor-pointer"
+                        >
+                          Play Match Now
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    matchHistory.map((item, index) => {
+                      const isWin = item.status === 'win';
+                      const isTie = item.status === 'tie';
+                      const statusColor = isWin 
+                        ? 'text-emerald-400 bg-emerald-500/15 border-emerald-500/30' 
+                        : isTie 
+                          ? 'text-amber-400 bg-amber-500/15 border-amber-500/30' 
+                          : 'text-rose-400 bg-rose-500/15 border-rose-500/30';
+                      
+                      const statusTitle = isWin ? 'VICTORY' : isTie ? 'TIED' : 'DEFEAT';
+                      const statusIcon = isWin ? '🏆' : isTie ? '🤝' : '💀';
+
+                      const totalCards = Math.max(1, item.finalScoreMyTeam + item.finalScoreOpponents);
+                      const myTeamPercent = Math.round((item.finalScoreMyTeam / totalCards) * 100);
+
+                      return (
+                        <motion.div
+                          key={item.id || index}
+                          initial={{ opacity: 0, y: 8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: index * 0.04 }}
+                          className={`p-4 rounded-2xl border transition-all ${
+                            isWin 
+                              ? 'bg-emerald-950/20 border-emerald-500/20 hover:border-emerald-500/40' 
+                              : isTie
+                                ? 'bg-amber-950/20 border-amber-500/20 hover:border-amber-500/40'
+                                : 'bg-rose-950/20 border-rose-500/20 hover:border-rose-500/40'
+                          }`}
+                        >
+                          {/* Top Row: Win/Loss status & Date */}
+                          <div className="flex items-center justify-between gap-2 mb-2.5">
+                            <div className="flex items-center gap-2">
+                              <span className={`px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest border flex items-center gap-1 ${statusColor}`}>
+                                <span>{statusIcon}</span>
+                                <span>{statusTitle}</span>
+                              </span>
+                              <span className="text-[8px] font-black uppercase tracking-wider text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">
+                                {item.mode === 'private' ? 'Private Table' : 'Classic 4P'}
+                              </span>
+                            </div>
+
+                            {/* Date */}
+                            <div className="flex items-center gap-1 text-[9px] font-mono text-white/50" title="Match completion date">
+                              <Clock size={11} className="text-white/40" />
+                              <span>{item.date}</span>
+                            </div>
+                          </div>
+
+                          {/* Middle Row: Opponent Names */}
+                          <div className="mb-3 px-2.5 py-1.5 rounded-xl bg-black/20 border border-white/5 flex items-center justify-between text-xs">
+                            <div className="flex items-center gap-1.5 text-white/90 truncate">
+                              <span className="text-white/40 text-[9px] font-black uppercase tracking-wider">VS:</span>
+                              <span className="font-bold text-white tracking-wide truncate" title={item.opponents}>
+                                {item.opponents}
+                              </span>
+                            </div>
+                            <span className="text-[8px] font-mono text-white/30 shrink-0 ml-2">
+                              #{item.id.slice(0, 10)}
+                            </span>
+                          </div>
+
+                          {/* Bottom Row: Final Scores */}
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between text-xs font-black">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-white/60 text-[9px] uppercase tracking-wider">Your Team:</span>
+                                <span className={`text-sm ${isWin ? 'text-emerald-400 font-black' : 'text-white'}`}>
+                                  {item.finalScoreMyTeam} pts
+                                </span>
+                              </div>
+                              <span className="text-white/20 font-bold">:</span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-white/60 text-[9px] uppercase tracking-wider">Opponents:</span>
+                                <span className={`text-sm ${!isWin && !isTie ? 'text-rose-400 font-black' : 'text-white'}`}>
+                                  {item.finalScoreOpponents} pts
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Score comparison progress bar */}
+                            <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden flex border border-white/10 shadow-inner">
+                              <div
+                                style={{ width: `${myTeamPercent}%` }}
+                                className={`h-full transition-all ${
+                                  isWin ? 'bg-emerald-500' : isTie ? 'bg-amber-500' : 'bg-rose-500/70'
+                                }`}
+                                title={`Your team: ${item.finalScoreMyTeam} cards`}
+                              />
+                              <div
+                                style={{ width: `${100 - myTeamPercent}%` }}
+                                className="h-full bg-white/20"
+                                title={`Opponents: ${item.finalScoreOpponents} cards`}
+                              />
+                            </div>
+                          </div>
+                        </motion.div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Footer Controls */}
+                <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between gap-3 text-xs">
+                  <span className="text-[8.5px] font-mono text-white/40 uppercase">
+                    Showing max 10 recent games
+                  </span>
+                  <button
+                    onClick={() => setIsMatchHistoryOpen(false)}
+                    className="px-4 py-1.5 rounded-xl bg-indigo-600/30 hover:bg-indigo-600/50 border border-indigo-500/40 text-[8.5px] font-black uppercase text-white tracking-wider transition-all cursor-pointer active:scale-95"
+                  >
+                    Done
                   </button>
                 </div>
               </motion.div>
