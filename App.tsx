@@ -33,11 +33,12 @@ import { toast, Toaster } from 'sonner';
 import { auth, db } from './firebase';
 import { Card, GameState, Player, Suit, SUITS, RANKS, RANK_VALUES, UserProfile, AppView, GameMode, Friend, FriendRequest, MatchHistoryEntry } from './types';
 import CardComponent from './components/CardComponent';
-import { Pencil, Clock, Camera, History, RefreshCw, Swords } from 'lucide-react';
+import { Pencil, Clock, Camera, History, RefreshCw, Swords, HelpCircle } from 'lucide-react';
 import { soundEffects } from './soundEffects';
 import VictoryCelebrationOverlay from './components/VictoryCelebrationOverlay';
 import { triggerVictoryConfetti } from './confettiCelebration';
 import EventsSection from './components/EventsSection';
+import DailyLoginBonusModal, { evaluateDailyBonusStatus } from './components/DailyLoginBonusModal';
 
 const INITIAL_COINS = 500;
 const STAKE_AMOUNT = 200;
@@ -536,6 +537,9 @@ const App: React.FC = () => {
   const nextStartTimeRef = useRef(0);
 
   const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
+  const [isPrivateModalOpen, setIsPrivateModalOpen] = useState(false);
+  const [isDailyBonusOpen, setIsDailyBonusOpen] = useState(false);
+  const dailyBonusCheckedRef = useRef(false);
   const [joinCode, setJoinCode] = useState('');
   const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
   const [newUsername, setNewUsername] = useState('');
@@ -1463,6 +1467,20 @@ const App: React.FC = () => {
     return () => unsubscribe();
   }, [syncProfileToCloud, fetchMatchHistory]);
 
+  // Auto-trigger Daily Login Bonus popup upon entering home if available
+  useEffect(() => {
+    if (view === 'home' && profile.turab_id && !dailyBonusCheckedRef.current) {
+      dailyBonusCheckedRef.current = true;
+      const status = evaluateDailyBonusStatus(profile);
+      if (status.canClaimToday) {
+        const timer = setTimeout(() => {
+          setIsDailyBonusOpen(true);
+        }, 700);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [view, profile.turab_id, profile.lastLoginBonusDate]);
+
   const handleLogin = async (method: 'google' | 'facebook' | 'email') => {
     setIsLoggingIn(true);
     try {
@@ -1500,6 +1518,7 @@ const App: React.FC = () => {
   };
 
   const handleLogout = async () => {
+    dailyBonusCheckedRef.current = false;
     await signOut(auth);
     setView('login');
     setProfile({ 
@@ -3337,37 +3356,97 @@ const App: React.FC = () => {
             </motion.div>
 
             <div className="space-y-3">
-              {/* Event & Crate Announcement Banner Button */}
-              <motion.button
+              {/* Event & Crate Teaser Advertisement Card */}
+              <motion.div
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
-                onClick={() => setView('events')}
-                className="w-full p-4 rounded-[2rem] bg-gradient-to-r from-orange-600 via-amber-600 to-purple-600 border border-orange-400/50 shadow-[0_10px_25px_rgba(249,115,22,0.35)] flex items-center justify-between text-left group transition-all cursor-pointer"
+                onClick={() => {
+                  soundEffects.playCardHover();
+                  setView('events');
+                }}
+                className="w-full rounded-[2rem] bg-gradient-to-br from-[#1c0808] via-[#090b17] to-[#120824] border border-orange-500/40 hover:border-amber-400/70 shadow-[0_12px_35px_rgba(249,115,22,0.25)] p-4 relative overflow-hidden group cursor-pointer text-left transition-all"
               >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl bg-black/40 border border-white/20 flex items-center justify-center text-xl animate-bounce">
-                    🎁
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[7.5px] font-black uppercase tracking-widest bg-black/40 px-2 py-0.5 rounded-full text-amber-300 border border-amber-400/30">
-                        2% CARD SKINS EVENT
+                {/* Moving holographic sheen sweep */}
+                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 pointer-events-none" />
+
+                {/* Ambient glow cores behind cards */}
+                <div className="absolute -top-12 -right-12 w-40 h-40 bg-orange-500/20 rounded-full blur-2xl pointer-events-none" />
+                <div className="absolute -bottom-10 -right-4 w-32 h-32 bg-cyan-500/20 rounded-full blur-2xl pointer-events-none" />
+
+                <div className="flex items-center justify-between relative z-10">
+                  {/* Left Side: Teaser Billboard Ad Copy */}
+                  <div className="flex-1 pr-3">
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className="text-[7.5px] font-black uppercase tracking-widest text-orange-400 bg-orange-500/15 border border-orange-500/30 px-2 py-0.5 rounded-full flex items-center gap-1 animate-pulse">
+                        <span>🔥</span>
+                        <span>NEW CRATE ARRIVAL</span>
+                      </span>
+                      <span className="text-[7.5px] font-black uppercase tracking-wider text-amber-300 font-mono">
+                        2% LUCK
                       </span>
                     </div>
-                    <div className="text-sm font-black uppercase text-white tracking-wide mt-0.5 group-hover:text-amber-200 transition-colors">
-                      Events & Crates
+
+                    <h3 className="text-base font-black uppercase tracking-tight text-white group-hover:text-amber-300 transition-colors flex items-center gap-1.5">
+                      <span>CYBER-INFERNO CRATE</span>
+                      <span className="text-xs">✨</span>
+                    </h3>
+
+                    <div className="text-[9px] text-white/60 font-medium line-clamp-1 mt-0.5">
+                      🐉 Inferno Dragon & ⚡ Cyber Nexus Legendary Skins
+                    </div>
+
+                    <div className="flex items-center gap-2 mt-2">
+                      <span className="text-[8px] font-black uppercase text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-md">
+                        200 🪙 / 1 🎟️ Coupon
+                      </span>
+                      <span className="text-[8px] font-black uppercase text-white/50 group-hover:text-white transition-colors flex items-center gap-0.5">
+                        <span>TEASER PREVIEW</span>
+                        <span>→</span>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Right Side: Fanned 3D Teaser Cards Preview */}
+                  <div className="relative w-28 h-24 shrink-0 flex items-center justify-center">
+                    {/* Background card: Inferno Dragon (tilted left) */}
+                    <motion.div
+                      animate={{ 
+                        rotate: [-12, -8, -12],
+                        y: [0, -3, 0]
+                      }}
+                      transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
+                      className="absolute -left-1 top-1 transform origin-bottom-right"
+                    >
+                      <CardComponent 
+                        card={{ suit: 'spades', rank: 'A', value: 14 }}
+                        skin="inferno"
+                        className="scale-[0.52] shadow-[0_0_15px_rgba(249,115,22,0.6)]"
+                      />
+                    </motion.div>
+
+                    {/* Foreground card: Cyber Nexus (tilted right) */}
+                    <motion.div
+                      animate={{ 
+                        rotate: [8, 12, 8],
+                        y: [-2, 1, -2]
+                      }}
+                      transition={{ duration: 4.5, repeat: Infinity, ease: 'easeInOut', delay: 0.5 }}
+                      className="absolute right-0 top-0 transform origin-bottom-left"
+                    >
+                      <CardComponent 
+                        card={{ suit: 'hearts', rank: 'K', value: 13 }}
+                        skin="cyberpunk"
+                        className="scale-[0.52] shadow-[0_0_15px_rgba(34,211,238,0.6)]"
+                      />
+                    </motion.div>
+
+                    {/* Subtle "NEW" floating badge */}
+                    <div className="absolute -bottom-1 right-2 z-20 px-1.5 py-0.5 rounded bg-amber-500 text-black text-[6.5px] font-black uppercase tracking-wider shadow-md">
+                      2 NEW
                     </div>
                   </div>
                 </div>
-                <div className="text-right">
-                  <div className="text-[8px] font-mono text-white/60 uppercase">Open & Craft</div>
-                  <div className="text-xs font-black text-amber-300 flex items-center justify-end gap-1">
-                    <span>200 🪙</span>
-                    <span className="text-white/40">/</span>
-                    <span>1 🎟️</span>
-                  </div>
-                </div>
-              </motion.button>
+              </motion.div>
 
               <motion.button 
                 whileHover={{ scale: 1.02 }}
@@ -3378,35 +3457,92 @@ const App: React.FC = () => {
                 Play Now
               </motion.button>
               
+              {/* Merged Private Table Button */}
+              <motion.button 
+                whileHover={{ y: -2 }} 
+                onClick={() => {
+                  soundEffects.playCardHover();
+                  setIsPrivateModalOpen(true);
+                }} 
+                className="glass-panel w-full py-4 rounded-2xl text-xs font-black uppercase border-indigo-500/30 text-indigo-300 hover:text-white hover:bg-indigo-500/10 hover:border-indigo-400/50 transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg"
+              >
+                <span>🔒</span>
+                <span>Private Table</span>
+              </motion.button>
+
+              {/* Daily Login Bonus Streak Button */}
+              <motion.button
+                whileHover={{ y: -2 }}
+                onClick={() => {
+                  soundEffects.playCardHover();
+                  setIsDailyBonusOpen(true);
+                }}
+                className={`w-full py-3 px-4 rounded-2xl glass-panel border transition-all flex items-center justify-between cursor-pointer group shadow-md ${
+                  evaluateDailyBonusStatus(profile).canClaimToday
+                    ? 'border-amber-500/50 bg-gradient-to-r from-amber-500/15 via-orange-500/10 to-transparent hover:border-amber-400'
+                    : 'border-white/10 bg-white/5 hover:border-white/20'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-sm ${
+                    evaluateDailyBonusStatus(profile).canClaimToday
+                      ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300 animate-bounce'
+                      : 'bg-white/5 border border-white/10 text-white/60'
+                  }`}>
+                    🎁
+                  </div>
+                  <div className="text-left">
+                    <div className="text-[7.5px] font-black uppercase tracking-wider text-amber-400">
+                      DAILY LOGIN BONUS
+                    </div>
+                    <div className="text-xs font-black text-white group-hover:text-amber-200 transition-colors">
+                      {evaluateDailyBonusStatus(profile).canClaimToday
+                        ? `✨ Day ${evaluateDailyBonusStatus(profile).activeDay} Bonus Ready!`
+                        : `Streak: ${profile.dailyStreak || 1} Days Active`}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  {evaluateDailyBonusStatus(profile).canClaimToday ? (
+                    <span className="px-2 py-0.5 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 text-black text-[7.5px] font-black uppercase tracking-wider shadow">
+                      CLAIM
+                    </span>
+                  ) : (
+                    <span className="text-[8px] font-mono text-white/40 uppercase">
+                      DAY {evaluateDailyBonusStatus(profile).activeDay}/7
+                    </span>
+                  )}
+                  <span className="text-xs text-white/40 group-hover:translate-x-0.5 transition-transform">→</span>
+                </div>
+              </motion.button>
+
+              {/* Friends & Free Coins */}
               <div className="grid grid-cols-2 gap-3">
-                <motion.button whileHover={{ y: -2 }} onClick={() => startNewGame('private')} className="glass-panel py-4 rounded-2xl text-[10px] font-black uppercase border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10 transition-all">
-                  Create Table
+                <motion.button 
+                  whileHover={{ y: -2 }} 
+                  onClick={() => setIsFriendsOpen(true)} 
+                  className="glass-panel py-3.5 rounded-2xl text-[10px] font-black uppercase border-white/10 hover:bg-white/5 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <span>👥</span>
+                  <span>Friends</span>
                 </motion.button>
-                <motion.button whileHover={{ y: -2 }} onClick={() => setIsJoinModalOpen(true)} className="glass-panel py-4 rounded-2xl text-[10px] font-black uppercase border-white/10 hover:bg-white/5 transition-all">
-                  Join Table
+                <motion.button 
+                  whileHover={{ opacity: 1 }} 
+                  onClick={watchAd} 
+                  className="py-3.5 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 text-[10px] font-black uppercase text-indigo-400 hover:text-indigo-300 hover:bg-indigo-600/20 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <span>📺</span>
+                  <span>Free Coins</span>
                 </motion.button>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <motion.button whileHover={{ y: -2 }} onClick={() => { setIsMatchHistoryOpen(true); fetchMatchHistory(); }} className="glass-panel py-3.5 rounded-2xl text-[10px] font-black uppercase border-indigo-500/30 text-indigo-300 hover:bg-indigo-500/10 hover:border-indigo-400/50 transition-all flex items-center justify-center gap-1.5">
-                  <History size={13} className="text-indigo-400" />
-                  <span>Match History</span>
-                </motion.button>
-                <motion.button whileHover={{ y: -2 }} onClick={() => setIsFriendsOpen(true)} className="glass-panel py-3.5 rounded-2xl text-[10px] font-black uppercase border-white/10 hover:bg-white/5 transition-all">
-                  Friends
-                </motion.button>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <motion.button whileHover={{ y: -2 }} onClick={() => { setTutorialPage(0); setIsTutorialOpen(true); }} className="glass-panel py-3.5 rounded-2xl text-[10px] font-black uppercase border-white/10 hover:bg-white/5 transition-all text-yellow-500 hover:border-yellow-500/20">
-                  How To Play 📖
-                </motion.button>
-                <motion.button whileHover={{ opacity: 1 }} onClick={watchAd} className="py-3.5 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 text-[10px] font-black uppercase text-indigo-400/60 hover:text-indigo-400 hover:bg-indigo-600/20 transition-all">
-                  📺 Free Coins
-                </motion.button>
-              </div>
-
-              <motion.button whileHover={{ opacity: 1 }} onClick={handleLogout} className="w-full py-3 rounded-2xl bg-red-600/10 border border-red-500/20 text-[10px] font-black uppercase text-red-400/60 hover:text-red-400 hover:bg-red-600/20 transition-all">
+              {/* Logout */}
+              <motion.button 
+                whileHover={{ opacity: 1 }} 
+                onClick={handleLogout} 
+                className="w-full py-3 rounded-2xl bg-red-600/10 border border-red-500/20 text-[10px] font-black uppercase text-red-400/60 hover:text-red-400 hover:bg-red-600/20 transition-all cursor-pointer"
+              >
                 📤 Logout
               </motion.button>
             </div>
@@ -3562,6 +3698,112 @@ const App: React.FC = () => {
               </motion.div>
             )}
           </AnimatePresence>
+
+          {/* Private Table Choice Modal */}
+          <AnimatePresence>
+            {isPrivateModalOpen && (
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 flex items-center justify-center z-[300] p-4"
+              >
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setIsPrivateModalOpen(false)}
+                  className="absolute inset-0 bg-black/80 backdrop-blur-md"
+                />
+                <motion.div 
+                  initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                  animate={{ scale: 1, opacity: 1, y: 0 }}
+                  exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                  className="relative w-full max-w-sm glass-panel p-7 rounded-[2.5rem] border border-indigo-500/30 bg-black/90 shadow-2xl z-[301] text-center mx-auto"
+                >
+                  <button 
+                    onClick={() => setIsPrivateModalOpen(false)}
+                    className="absolute top-5 right-5 w-8 h-8 rounded-full border border-white/10 hover:border-white/30 hover:bg-white/5 flex items-center justify-center transition-all text-xs font-black text-white/50 z-10 cursor-pointer"
+                    title="Close"
+                  >
+                    ✕
+                  </button>
+
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-2xl mx-auto mb-3 shadow-inner">
+                    🔒
+                  </div>
+
+                  <h2 className="text-2xl font-black uppercase tracking-tight text-white mb-1">
+                    Private Table
+                  </h2>
+                  <p className="text-[10px] font-black text-white/40 uppercase tracking-widest mb-6">
+                    Play exclusively with your friends
+                  </p>
+
+                  <div className="space-y-3 mb-2">
+                    {/* Option 1: Create Table */}
+                    <button
+                      onClick={() => {
+                        soundEffects.playCard();
+                        setIsPrivateModalOpen(false);
+                        startNewGame('private');
+                      }}
+                      className="w-full p-4 rounded-2xl bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 hover:border-indigo-400 text-left transition-all group cursor-pointer flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-indigo-500/20 flex items-center justify-center text-lg">
+                          👑
+                        </div>
+                        <div>
+                          <div className="text-xs font-black uppercase text-white group-hover:text-indigo-300 transition-colors">
+                            Create Table
+                          </div>
+                          <div className="text-[8px] font-medium text-white/50">
+                            Host a new room & get a 4-digit code
+                          </div>
+                        </div>
+                      </div>
+                      <span className="text-xs text-indigo-400 group-hover:translate-x-1 transition-transform">→</span>
+                    </button>
+
+                    {/* Option 2: Join Table */}
+                    <button
+                      onClick={() => {
+                        soundEffects.playCard();
+                        setIsPrivateModalOpen(false);
+                        setIsJoinModalOpen(true);
+                      }}
+                      className="w-full p-4 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 text-left transition-all group cursor-pointer flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center text-lg">
+                          🔑
+                        </div>
+                        <div>
+                          <div className="text-xs font-black uppercase text-white group-hover:text-white transition-colors">
+                            Join Table
+                          </div>
+                          <div className="text-[8px] font-medium text-white/50">
+                            Enter an existing 4-digit table code
+                          </div>
+                        </div>
+                      </div>
+                      <span className="text-xs text-white/40 group-hover:translate-x-1 transition-transform">→</span>
+                    </button>
+                  </div>
+                </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Daily Login Bonus Popup Modal */}
+          <DailyLoginBonusModal
+            isOpen={isDailyBonusOpen}
+            onClose={() => setIsDailyBonusOpen(false)}
+            profile={profile}
+            setProfile={setProfile}
+            syncProfileToCloud={syncProfileToCloud}
+          />
 
           {/* Join Table Modal */}
           <AnimatePresence>
@@ -5111,9 +5353,31 @@ const App: React.FC = () => {
         </AnimatePresence>
 
         {view === 'home' && (
-          <div className="fixed top-3 right-4 px-2 py-1 bg-black/30 backdrop-blur-md rounded-full text-[9px] font-bold text-white/50 select-none pointer-events-none z-[9999] uppercase tracking-widest border border-white/10">
-            v{APP_VERSION}
-          </div>
+          <>
+            {/* Top-Left: Sleek, compact How To Play button */}
+            <div className="fixed top-3 left-4 z-[9999]">
+              <motion.button
+                whileHover={{ scale: 1.08 }}
+                whileTap={{ scale: 0.94 }}
+                onClick={() => {
+                  soundEffects.playCard();
+                  setTutorialPage(0);
+                  setIsTutorialOpen(true);
+                }}
+                className="w-7 h-7 rounded-full border border-white/15 bg-black/40 hover:bg-white/10 hover:border-amber-400/50 flex items-center justify-center text-white/50 hover:text-amber-300 transition-all cursor-pointer shadow-sm group pointer-events-auto"
+                title="How To Play (Tutorial & Rules)"
+              >
+                <HelpCircle size={13} className="group-hover:rotate-12 transition-transform text-white/60 group-hover:text-amber-300" />
+              </motion.button>
+            </div>
+
+            {/* Top-Right: Discreet, ultra-clean micro version tag */}
+            <div className="fixed top-3 right-4 z-[9999]">
+              <div className="px-1.5 py-0.5 bg-black/25 backdrop-blur-sm rounded text-[7.5px] font-mono font-medium text-white/30 select-none pointer-events-none uppercase tracking-wider border border-white/5">
+                v{APP_VERSION}
+              </div>
+            </div>
+          </>
         )}
         <div className="fixed bottom-3 right-4 flex items-center gap-1.5 px-2.5 py-1 bg-black/40 backdrop-blur-md rounded-full text-[9px] font-black tracking-widest text-white/50 select-none pointer-events-none z-[9999] uppercase border border-white/5">
           <span className={`w-1.5 h-1.5 rounded-full ${

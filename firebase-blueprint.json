@@ -20,6 +20,8 @@
         "frames": { "type": "array", "items": { "type": "string" } },
         "activeFrame": { "type": "string", "enum": ["none", "elite", "grandmaster", "thunder"] },
         "role": { "type": "string", "enum": ["admin", "user"] },
+        "dailyStreak": { "type": "number" },
+        "lastLoginBonusDate": { "type": "string" },
         "friends": { 
           "type": "array", 
           "items": { 

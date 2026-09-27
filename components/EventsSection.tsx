@@ -4,7 +4,7 @@ import { UserProfile, EventAnnouncement } from '../types';
 import CardComponent from './CardComponent';
 import { soundEffects } from '../soundEffects';
 import { triggerVictoryConfetti } from '../confettiCelebration';
-import { Sparkles, Trophy, Gift, ArrowLeft, Flame, Zap, Shield, RefreshCw, Edit3, Check } from 'lucide-react';
+import { Sparkles, Trophy, Gift, ArrowLeft, Flame, Zap, Shield, RefreshCw, Edit3, Check, Eye, HelpCircle } from 'lucide-react';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { toast } from 'sonner';
@@ -21,9 +21,24 @@ interface CrateReward {
   skinId?: 'inferno' | 'cyberpunk';
   name: string;
   amount?: number;
-  rarity: 'Legendary' | 'Epic' | 'Rare' | 'Common';
+  rarity: 'Legendary' | 'Epic' | 'Rare' | 'Uncommon' | 'Common';
   description: string;
   icon: string;
+}
+
+interface ShowcaseItem {
+  id: string;
+  type: 'skin' | 'coins' | 'scraps';
+  name: string;
+  category: 'all' | 'skins' | 'coins' | 'scraps';
+  amount?: number;
+  rarity: 'Legendary' | 'Epic' | 'Rare' | 'Uncommon' | 'Common';
+  dropRate: string;
+  icon: string;
+  description: string;
+  skinId?: 'inferno' | 'cyberpunk';
+  highlight: string;
+  badgeStyle: string;
 }
 
 const DEFAULT_EVENT: EventAnnouncement = {
@@ -31,7 +46,7 @@ const DEFAULT_EVENT: EventAnnouncement = {
   title: 'SEASON 1: INFERNO & CYBER NEXUS',
   subtitle: 'LIMITED EDITION EVENT CRATE',
   badge: 'ACTIVE EVENT • 2% DROP RATE',
-  description: 'Unbox exclusive Mythic Card Skins, forge free Crate Coupons with Scraps, and dominate the Court Piece arena with custom visual styles!',
+  description: 'Unbox brand-new Legendary Card Skins with custom bespoke artwork, volcanic magma textures & holographic HUD matrix. Collect Coupon Scraps to forge free Crate Coupons!',
   crateName: 'Cyber-Inferno Mystery Crate',
   crateCostCoins: 200,
   featuredSkins: [
@@ -39,19 +54,178 @@ const DEFAULT_EVENT: EventAnnouncement = {
       id: 'inferno',
       name: 'Inferno Dragon',
       rarity: 'Legendary',
-      description: 'Molten magma borders & volcanic embers forged in the dragon realm.',
+      description: 'Handcrafted volcanic obsidian stone, dragon crest watermark, gold dragon filigree & magma card back.',
       dropRate: '1.0%'
     },
     {
       id: 'cyberpunk',
       name: 'Cyber Nexus',
       rarity: 'Legendary',
-      description: 'Futuristic iridescent cyan & electric magenta holographic grid.',
+      description: 'Holographic cyber grid with quantum HUD reticle, neon brackets, scanline sheen & processor card back.',
       dropRate: '1.0%'
     }
   ],
   active: true
 };
+
+const ALL_POSSIBLE_REWARDS: ShowcaseItem[] = [
+  {
+    id: 'skin-inferno',
+    type: 'skin',
+    name: 'Inferno Dragon Skin',
+    category: 'skins',
+    rarity: 'Legendary',
+    dropRate: '1.0%',
+    icon: '🐉',
+    description: 'Bespoke volcanic magma stone card skin with flame dragon crest, ornate gold filigree & dragon scale card back.',
+    skinId: 'inferno',
+    highlight: '2% CARD SKINS LUCK',
+    badgeStyle: 'border-orange-500/80 bg-orange-950/60 text-orange-300'
+  },
+  {
+    id: 'skin-cyberpunk',
+    type: 'skin',
+    name: 'Cyber Nexus Skin',
+    category: 'skins',
+    rarity: 'Legendary',
+    dropRate: '1.0%',
+    icon: '⚡',
+    description: 'Holographic cyber matrix with quantum HUD orbital reticle, neon cyan/fuchsia brackets & cyber-chip card back.',
+    skinId: 'cyberpunk',
+    highlight: '2% CARD SKINS LUCK',
+    badgeStyle: 'border-cyan-500/80 bg-cyan-950/60 text-cyan-300'
+  },
+  {
+    id: 'coins-150',
+    type: 'coins',
+    name: '150 Coins Jackpot',
+    category: 'coins',
+    amount: 150,
+    rarity: 'Epic',
+    dropRate: '1.0%',
+    icon: '🪙',
+    description: 'Maximum coin jackpot! The highest possible coin haul from a single crate opening.',
+    highlight: 'JACKPOT',
+    badgeStyle: 'border-amber-400/70 bg-amber-950/50 text-amber-300'
+  },
+  {
+    id: 'scraps-5',
+    type: 'scraps',
+    name: '5 Coupon Scraps',
+    category: 'scraps',
+    amount: 5,
+    rarity: 'Epic',
+    dropRate: '4.8%',
+    icon: '🎟️',
+    description: 'Massive scrap haul! Instantly fills half the requirement for a free Crate Coupon.',
+    highlight: '50% TO FREE CRATE',
+    badgeStyle: 'border-purple-400/70 bg-purple-950/50 text-purple-300'
+  },
+  {
+    id: 'coins-120',
+    type: 'coins',
+    name: '120 Coins Cache',
+    category: 'coins',
+    amount: 120,
+    rarity: 'Rare',
+    dropRate: '3.0%',
+    icon: '💰',
+    description: 'Heavy coin cache directly replenishing your balance for tournament stakes.',
+    highlight: 'HIGH TIER',
+    badgeStyle: 'border-blue-400/70 bg-blue-950/50 text-blue-300'
+  },
+  {
+    id: 'scraps-3',
+    type: 'scraps',
+    name: '3 Coupon Scraps',
+    category: 'scraps',
+    amount: 3,
+    rarity: 'Rare',
+    dropRate: '12.0%',
+    icon: '🎟️',
+    description: 'Three coupon fragments to accelerate your forge towards a free crate chance.',
+    highlight: '3 FRAGMENTS',
+    badgeStyle: 'border-indigo-400/70 bg-indigo-950/50 text-indigo-300'
+  },
+  {
+    id: 'coins-80',
+    type: 'coins',
+    name: '80 Coins Pouch',
+    category: 'coins',
+    amount: 80,
+    rarity: 'Uncommon',
+    dropRate: '8.0%',
+    icon: '🪙',
+    description: 'Substantial coin pouch to support your card play bets.',
+    highlight: 'REWARD',
+    badgeStyle: 'border-emerald-400/60 bg-emerald-950/40 text-emerald-300'
+  },
+  {
+    id: 'scraps-2',
+    type: 'scraps',
+    name: '2 Coupon Scraps',
+    category: 'scraps',
+    amount: 2,
+    rarity: 'Uncommon',
+    dropRate: '14.4%',
+    icon: '🎟️',
+    description: 'Two valuable scrap pieces for the coupon crafting workshop.',
+    highlight: '2 FRAGMENTS',
+    badgeStyle: 'border-teal-400/60 bg-teal-950/40 text-teal-300'
+  },
+  {
+    id: 'coins-50',
+    type: 'coins',
+    name: '50 Coins Stash',
+    category: 'coins',
+    amount: 50,
+    rarity: 'Uncommon',
+    dropRate: '12.0%',
+    icon: '🪙',
+    description: 'A solid 50-coin stash to help recoup your opening investment.',
+    highlight: 'RETURN',
+    badgeStyle: 'border-emerald-500/40 bg-emerald-950/30 text-emerald-200'
+  },
+  {
+    id: 'coins-35',
+    type: 'coins',
+    name: '35 Coins Stack',
+    category: 'coins',
+    amount: 35,
+    rarity: 'Common',
+    dropRate: '14.0%',
+    icon: '🪙',
+    description: 'Modest coin stack awarded straight to your account.',
+    highlight: 'COINS',
+    badgeStyle: 'border-slate-500/40 bg-slate-900/60 text-slate-300'
+  },
+  {
+    id: 'scraps-1',
+    type: 'scraps',
+    name: '1 Coupon Scrap',
+    category: 'scraps',
+    amount: 1,
+    rarity: 'Common',
+    dropRate: '16.8%',
+    icon: '🎟️',
+    description: 'A single scrap coupon fragment. Every 10 scraps forge 1 free Crate Coupon.',
+    highlight: 'CRAFTING',
+    badgeStyle: 'border-slate-500/40 bg-slate-900/60 text-slate-300'
+  },
+  {
+    id: 'coins-20',
+    type: 'coins',
+    name: '20 Coins Pocket',
+    category: 'coins',
+    amount: 20,
+    rarity: 'Common',
+    dropRate: '12.0%',
+    icon: '🪙',
+    description: 'Baseline coin return added to your player wallet.',
+    highlight: 'COINS',
+    badgeStyle: 'border-slate-500/40 bg-slate-900/60 text-slate-300'
+  }
+];
 
 export const EventsSection: React.FC<EventsSectionProps> = ({
   profile,
@@ -68,6 +242,9 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
   const [editDescription, setEditDescription] = useState(eventData.description);
   const [editBadge, setEditBadge] = useState(eventData.badge);
   const [activeTab, setActiveTab] = useState<'crate' | 'skins' | 'crafting'>('crate');
+  const [catalogFilter, setCatalogFilter] = useState<'all' | 'skins' | 'coins' | 'scraps'>('all');
+  const [inspectItem, setInspectItem] = useState<ShowcaseItem | null>(null);
+  const [teaserShowBack, setTeaserShowBack] = useState(false);
 
   // Load live announcement from Firestore
   useEffect(() => {
@@ -108,7 +285,10 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
   };
 
   /**
-   * Crate Opening Logic with strictly 2% Card Skin Luck
+   * Crate Opening Logic:
+   * - Exactly 2% Luck for Card Skins (1% Inferno, 1% Cyberpunk)
+   * - 48% Luck for Coupon Scraps (1, 2, 3, or 5 Scraps)
+   * - 50% Luck for Bonus Coins (strictly 20 - 150 Coins)
    */
   const handleOpenCrate = async (useCoupon: boolean) => {
     if (isOpening) return;
@@ -136,8 +316,7 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
       updatedProfile.coins = Math.max(0, profile.coins - eventData.crateCostCoins);
     }
 
-    // Determine drop outcome:
-    // Strictly 2% chance for card skin (rng < 0.02)
+    // Determine outcome
     const rng = Math.random();
     let reward: CrateReward;
 
@@ -147,22 +326,21 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
       const skinId: 'inferno' | 'cyberpunk' = isInferno ? 'inferno' : 'cyberpunk';
       const skinName = isInferno ? 'Inferno Dragon Skin' : 'Cyber Nexus Skin';
 
-      // Check if already owned
       const alreadyOwned = updatedProfile.skins?.includes(skinId);
 
       if (alreadyOwned) {
-        // Generous duplicate compensation: 500 Coins + 5 Scraps
+        // Balanced duplicate compensation: 120 Coins + 4 Scraps
         reward = {
           type: 'skin',
           skinId,
           name: `${skinName} (Duplicate)`,
-          amount: 500,
+          amount: 120,
           rarity: 'Legendary',
-          description: 'You already own this skin! Converted to 500 Bonus Coins & 5 Coupon Scraps!',
-          icon: isInferno ? '🔥' : '⚡'
+          description: 'You already own this Legendary Skin! Converted into 120 Bonus Coins & 4 Coupon Scraps!',
+          icon: isInferno ? '🐉' : '⚡'
         };
-        updatedProfile.coins += 500;
-        updatedProfile.scraps = (updatedProfile.scraps || 0) + 5;
+        updatedProfile.coins += 120;
+        updatedProfile.scraps = (updatedProfile.scraps || 0) + 4;
       } else {
         reward = {
           type: 'skin',
@@ -170,29 +348,31 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
           name: skinName,
           rarity: 'Legendary',
           description: isInferno 
-            ? 'Molten obsidian & dragon flames visual style unlocked!'
-            : 'Holographic cyber grid visual style unlocked!',
-          icon: isInferno ? '🔥' : '⚡'
+            ? 'Bespoke volcanic obsidian stone, dragon crest watermark, gold dragon filigree & magma card back.'
+            : 'Holographic cyber grid with quantum HUD reticle, neon brackets, scanline sheen & processor card back.',
+          icon: isInferno ? '🐉' : '⚡'
         };
         const currentSkins = updatedProfile.skins || ['classic'];
         updatedProfile.skins = [...currentSkins, skinId];
         updatedProfile.activeSkin = skinId; // Auto-equip newly unboxed legendary skin!
       }
     } else if (rng < 0.50) {
-      // 48% chance: Coupon Scraps
+      // 48% chance: Coupon Scraps (10 scraps craft 1 full free crate coupon)
       const scrapRoll = Math.random();
       let scrapsWon = 1;
-      let rarity: 'Common' | 'Rare' | 'Epic' = 'Common';
+      let rarity: 'Common' | 'Uncommon' | 'Rare' | 'Epic' = 'Common';
       if (scrapRoll < 0.10) {
-        scrapsWon = 5; // 5 scraps jackpot
+        scrapsWon = 5; // 5 scraps jackpot (4.8%)
         rarity = 'Epic';
       } else if (scrapRoll < 0.35) {
-        scrapsWon = 3;
+        scrapsWon = 3; // 3 scraps (12.0%)
         rarity = 'Rare';
       } else if (scrapRoll < 0.65) {
-        scrapsWon = 2;
+        scrapsWon = 2; // 2 scraps (14.4%)
+        rarity = 'Uncommon';
       } else {
-        scrapsWon = 1;
+        scrapsWon = 1; // 1 scrap (16.8%)
+        rarity = 'Common';
       }
 
       reward = {
@@ -200,26 +380,34 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
         amount: scrapsWon,
         name: `${scrapsWon} Coupon Scrap${scrapsWon > 1 ? 's' : ''}`,
         rarity,
-        description: 'Collect 10 scraps to forge 1 free Crate Opening Coupon!',
+        description: 'Collect 10 scraps to forge 1 free Crate Opening Coupon in the workshop!',
         icon: '🎟️'
       };
       updatedProfile.scraps = (updatedProfile.scraps || 0) + scrapsWon;
     } else {
-      // 50% chance: Bonus Coins
+      // 50% chance: Bonus Coins (strictly 20 - 150 coins as requested)
       const coinRoll = Math.random();
-      let coinsWon = 100;
-      let rarity: 'Common' | 'Rare' | 'Epic' = 'Common';
-      if (coinRoll < 0.05) {
-        coinsWon = 1000; // Mega coin jackpot!
+      let coinsWon = 20;
+      let rarity: 'Common' | 'Uncommon' | 'Rare' | 'Epic' = 'Common';
+
+      if (coinRoll < 0.02) {
+        coinsWon = 150; // 150 Coins Jackpot (1%)
         rarity = 'Epic';
-      } else if (coinRoll < 0.20) {
-        coinsWon = 500;
+      } else if (coinRoll < 0.08) {
+        coinsWon = 120; // 120 Coins (3%)
         rarity = 'Rare';
-      } else if (coinRoll < 0.50) {
-        coinsWon = 250;
-        rarity = 'Rare';
+      } else if (coinRoll < 0.24) {
+        coinsWon = 80; // 80 Coins (8%)
+        rarity = 'Uncommon';
+      } else if (coinRoll < 0.48) {
+        coinsWon = 50; // 50 Coins (12%)
+        rarity = 'Uncommon';
+      } else if (coinRoll < 0.76) {
+        coinsWon = 35; // 35 Coins (14%)
+        rarity = 'Common';
       } else {
-        coinsWon = 100;
+        coinsWon = 20; // 20 Coins (12%)
+        rarity = 'Common';
       }
 
       reward = {
@@ -227,7 +415,7 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
         amount: coinsWon,
         name: `${coinsWon} Coins`,
         rarity,
-        description: 'Instant bonus coins added to your player balance!',
+        description: 'Instant coins deposited straight into your player purse!',
         icon: '🪙'
       };
       updatedProfile.coins += coinsWon;
@@ -300,6 +488,11 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
   const currentScraps = profile.scraps || 0;
   const currentCoupons = profile.coupons || 0;
 
+  const filteredCatalog = ALL_POSSIBLE_REWARDS.filter(item => {
+    if (catalogFilter === 'all') return true;
+    return item.category === catalogFilter;
+  });
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -314,13 +507,13 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
       <div className="w-full max-w-4xl flex items-center justify-between mb-6 z-10">
         <button
           onClick={onBack}
-          className="glass-panel px-4 py-2 rounded-2xl flex items-center gap-2 text-white/70 hover:text-white hover:border-white/30 transition-all text-xs font-black uppercase tracking-wider"
+          className="glass-panel px-4 py-2 rounded-2xl flex items-center gap-2 text-white/70 hover:text-white hover:border-white/30 transition-all text-xs font-black uppercase tracking-wider cursor-pointer"
         >
           <ArrowLeft size={16} />
           <span>Lobby</span>
         </button>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           {/* Scraps Balance */}
           <div className="glass-panel px-3 py-1.5 rounded-xl border-amber-500/20 bg-amber-500/5 flex items-center gap-1.5 text-xs font-black text-amber-300">
             <span>🎟️</span>
@@ -342,7 +535,7 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
           {profile.role === 'admin' && (
             <button
               onClick={() => setShowAdminEditModal(true)}
-              className="px-3 py-1.5 rounded-xl bg-indigo-600/30 border border-indigo-400/40 text-[10px] font-black uppercase text-indigo-300 hover:text-white transition-all flex items-center gap-1"
+              className="px-3 py-1.5 rounded-xl bg-indigo-600/30 border border-indigo-400/40 text-[10px] font-black uppercase text-indigo-300 hover:text-white transition-all flex items-center gap-1 cursor-pointer"
               title="Admin: Edit Announcement"
             >
               <Edit3 size={12} />
@@ -352,42 +545,165 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
         </div>
       </div>
 
-      {/* Event Announcement Hero Banner */}
-      <div className="w-full max-w-4xl glass-panel p-6 md:p-8 rounded-[2.5rem] border border-orange-500/30 bg-gradient-to-r from-orange-950/30 via-slate-900/60 to-purple-950/30 shadow-[0_0_50px_rgba(249,115,22,0.15)] relative overflow-hidden mb-8 z-10 text-center md:text-left flex flex-col md:flex-row items-center justify-between gap-6">
-        <div className="relative z-10 flex-1">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-orange-500/15 border border-orange-500/30 text-orange-400 text-[9px] font-black uppercase tracking-widest mb-3 animate-pulse">
-            <Flame size={12} />
-            <span>{eventData.badge}</span>
-          </div>
-          <h1 className="text-2xl md:text-4xl font-black uppercase tracking-tight text-white mb-2">
-            {eventData.title}
-          </h1>
-          <p className="text-xs md:text-sm text-white/60 leading-relaxed max-w-xl">
-            {eventData.description}
-          </p>
-        </div>
+      {/* Event Announcement & New Cards Teaser Advertisement Billboard */}
+      <div className="w-full max-w-4xl glass-panel p-6 md:p-8 rounded-[2.5rem] border border-orange-500/40 bg-gradient-to-br from-[#1a0606] via-[#080d1a] to-[#140624] shadow-[0_0_60px_rgba(249,115,22,0.2)] relative overflow-hidden mb-6 z-10">
+        {/* Dynamic promotional lighting glows */}
+        <div className="absolute top-0 right-1/4 w-80 h-80 bg-orange-500/15 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute bottom-0 right-0 w-80 h-80 bg-cyan-500/15 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent pointer-events-none" />
 
-        {/* Drop Rate Highlight Badge */}
-        <div className="flex flex-col items-center md:items-end gap-2 shrink-0">
-          <div className="glass-panel p-4 rounded-2xl border-orange-500/30 bg-black/40 text-center">
-            <div className="text-[8px] font-black text-white/40 uppercase tracking-widest">Card Skins Luck</div>
-            <div className="text-3xl font-black text-amber-400 tracking-tight">2.0%</div>
-            <div className="text-[7.5px] font-mono text-emerald-400 uppercase mt-0.5">Legendary Tier</div>
+        <div className="flex flex-col lg:flex-row items-center justify-between gap-6 relative z-10">
+          {/* Left Column: Teaser Ad Headline & Specifications */}
+          <div className="flex-1 text-center lg:text-left">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-orange-500/15 border border-orange-500/30 text-orange-400 text-[9px] font-black uppercase tracking-widest mb-3 animate-pulse">
+              <Flame size={12} />
+              <span>{eventData.badge}</span>
+              <span className="text-white/40">•</span>
+              <span>2 NEW BESPOKE SKINS</span>
+            </div>
+
+            <h1 className="text-2xl md:text-4xl font-black uppercase tracking-tight text-white mb-2 leading-tight">
+              {eventData.title}
+            </h1>
+
+            <p className="text-xs md:text-sm text-white/70 leading-relaxed max-w-xl mb-4">
+              {eventData.description}
+            </p>
+
+            {/* Teaser Feature Highlights */}
+            <div className="grid grid-cols-2 gap-2.5 max-w-lg mb-5 text-left">
+              <div 
+                onClick={() => setInspectItem(ALL_POSSIBLE_REWARDS[0])}
+                className="p-2.5 rounded-xl bg-orange-950/40 border border-orange-500/30 hover:border-orange-400 transition-all cursor-pointer group"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[7px] font-black uppercase text-orange-400">1.0% Legendary</span>
+                  <span className="text-[7.5px] text-white/50 group-hover:text-white">Inspect 🔍</span>
+                </div>
+                <div className="text-xs font-black text-white mt-0.5">🐉 Inferno Dragon</div>
+                <div className="text-[7.5px] text-white/60">Volcanic Magma · Dragon Crest</div>
+              </div>
+
+              <div 
+                onClick={() => setInspectItem(ALL_POSSIBLE_REWARDS[1])}
+                className="p-2.5 rounded-xl bg-cyan-950/40 border border-cyan-500/30 hover:border-cyan-400 transition-all cursor-pointer group"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[7px] font-black uppercase text-cyan-400">1.0% Legendary</span>
+                  <span className="text-[7.5px] text-white/50 group-hover:text-white">Inspect 🔍</span>
+                </div>
+                <div className="text-xs font-black text-white mt-0.5">⚡ Cyber Nexus</div>
+                <div className="text-[7.5px] text-white/60">Hologram HUD · Tech Matrix</div>
+              </div>
+            </div>
+
+            {/* Quick Actions */}
+            <div className="flex flex-wrap items-center justify-center lg:justify-start gap-3">
+              <button
+                onClick={() => setActiveTab('crate')}
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-400 hover:to-orange-400 text-black text-xs font-black uppercase tracking-wider shadow-[0_0_20px_rgba(245,158,11,0.4)] active:scale-95 transition-all cursor-pointer"
+              >
+                Open Event Crate (200 🪙)
+              </button>
+
+              <button
+                onClick={() => setShowOddsModal(true)}
+                className="px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/70 hover:text-white text-xs font-black uppercase tracking-wider transition-all cursor-pointer"
+              >
+                Drop Odds (2% Skins) ℹ️
+              </button>
+            </div>
           </div>
-          <button
-            onClick={() => setShowOddsModal(true)}
-            className="text-[9px] font-black text-white/40 hover:text-white uppercase tracking-wider underline cursor-pointer"
-          >
-            View Drop Probabilities ℹ️
-          </button>
+
+          {/* Right Column: 3D Teaser Card Showcase Stage */}
+          <div className="shrink-0 flex flex-col items-center">
+            {/* Teaser Stage Title & Flip Toggle */}
+            <div className="flex items-center justify-between w-full mb-3 px-2">
+              <span className="text-[8px] font-black uppercase tracking-widest text-amber-300">
+                ✨ TEASER STAGE
+              </span>
+              <button
+                onClick={() => {
+                  soundEffects.playCard();
+                  setTeaserShowBack(!teaserShowBack);
+                }}
+                className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20 text-[8px] font-black uppercase text-white transition-all cursor-pointer flex items-center gap-1 shadow-sm"
+              >
+                <span>🔄 Flip:</span>
+                <span className="text-amber-300">{teaserShowBack ? 'Show Faces' : 'Show Backs'}</span>
+              </button>
+            </div>
+
+            {/* Fanned 3D Teaser Stage */}
+            <div className="relative w-64 h-48 flex items-center justify-center">
+              {/* Background ambient circular floor glow */}
+              <div className="absolute bottom-2 w-48 h-10 bg-gradient-to-r from-orange-500/30 via-amber-500/20 to-cyan-500/30 rounded-full blur-md" />
+
+              {/* Card 1: Inferno Dragon (Left Card) */}
+              <motion.div
+                animate={{
+                  y: [0, -6, 0],
+                  rotate: [-14, -10, -14],
+                }}
+                transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
+                onClick={() => setInspectItem(ALL_POSSIBLE_REWARDS[0])}
+                className="absolute left-4 top-2 transform origin-bottom-center cursor-pointer group z-10"
+                title="Click to inspect Inferno Dragon"
+              >
+                <div className="transition-transform group-hover:scale-105 group-hover:-translate-y-2">
+                  <CardComponent
+                    card={{ suit: 'spades', rank: 'A', value: 14 }}
+                    hidden={teaserShowBack}
+                    skin="inferno"
+                    className="shadow-[0_0_25px_rgba(249,115,22,0.5)]"
+                  />
+                  <div className="mt-1 text-center">
+                    <span className="text-[7.5px] font-black uppercase px-2 py-0.5 rounded bg-orange-950/80 border border-orange-500/50 text-orange-300">
+                      Inferno 🐉
+                    </span>
+                  </div>
+                </div>
+              </motion.div>
+
+              {/* Card 2: Cyber Nexus (Right Card) */}
+              <motion.div
+                animate={{
+                  y: [-3, 3, -3],
+                  rotate: [12, 16, 12],
+                }}
+                transition={{ duration: 4.5, repeat: Infinity, ease: 'easeInOut', delay: 0.3 }}
+                onClick={() => setInspectItem(ALL_POSSIBLE_REWARDS[1])}
+                className="absolute right-4 top-1 transform origin-bottom-center cursor-pointer group z-20"
+                title="Click to inspect Cyber Nexus"
+              >
+                <div className="transition-transform group-hover:scale-105 group-hover:-translate-y-2">
+                  <CardComponent
+                    card={{ suit: 'hearts', rank: 'K', value: 13 }}
+                    hidden={teaserShowBack}
+                    skin="cyberpunk"
+                    className="shadow-[0_0_25px_rgba(34,211,238,0.5)]"
+                  />
+                  <div className="mt-1 text-center">
+                    <span className="text-[7.5px] font-black uppercase px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/50 text-cyan-300">
+                      Cyber ⚡
+                    </span>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+
+            <div className="text-[7.5px] font-mono text-white/40 mt-2">
+              👆 Tap any card to inspect high-res art & lore
+            </div>
+          </div>
         </div>
       </div>
 
       {/* Category Tabs */}
-      <div className="w-full max-w-4xl flex items-center justify-center gap-2 mb-8 z-10">
+      <div className="w-full max-w-4xl flex items-center justify-center gap-2 mb-6 z-10">
         <button
           onClick={() => setActiveTab('crate')}
-          className={`px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${
+          className={`px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
             activeTab === 'crate'
               ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-[0_0_20px_rgba(249,115,22,0.4)] scale-105'
               : 'glass-panel text-white/50 hover:text-white'
@@ -399,7 +715,7 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
 
         <button
           onClick={() => setActiveTab('skins')}
-          className={`px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${
+          className={`px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
             activeTab === 'skins'
               ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-[0_0_20px_rgba(147,51,234,0.4)] scale-105'
               : 'glass-panel text-white/50 hover:text-white'
@@ -411,31 +727,38 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
 
         <button
           onClick={() => setActiveTab('crafting')}
-          className={`px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${
+          className={`px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
             activeTab === 'crafting'
               ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-[0_0_20px_rgba(16,185,129,0.4)] scale-105'
               : 'glass-panel text-white/50 hover:text-white'
           }`}
         >
-          <span>🎟️ Coupon Workshop</span>
+          <span>🎟️ Coupon Forge</span>
         </button>
       </div>
 
-      {/* TAB 1: Crate Opening Area */}
+      {/* TAB 1: Crate Opening Area & REWARDS SHOWCASE */}
       {activeTab === 'crate' && (
-        <div className="w-full max-w-4xl flex flex-col items-center z-10">
+        <div className="w-full max-w-4xl flex flex-col items-center z-10 space-y-8">
+          {/* Crate Box Card */}
           <div className="w-full max-w-md glass-panel p-8 rounded-[3rem] border border-orange-500/40 bg-black/60 shadow-[0_20px_50px_rgba(0,0,0,0.8)] text-center relative overflow-hidden">
-            {/* Ambient Crate Core Aura */}
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-48 bg-gradient-to-tr from-orange-500/20 via-amber-500/10 to-transparent rounded-full blur-[50px] pointer-events-none" />
 
-            <div className="mb-2 text-[9px] font-black uppercase tracking-widest text-orange-400">
+            <div className="mb-1 text-[9px] font-black uppercase tracking-widest text-orange-400">
               {eventData.crateName}
             </div>
-            <h2 className="text-2xl font-black uppercase tracking-tight text-white mb-6">
+            <h2 className="text-2xl font-black uppercase tracking-tight text-white mb-2">
               CYBER-INFERNO CRATE
             </h2>
 
-            {/* Animated Crate Icon */}
+            {/* Teaser Ad Badge Strip */}
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-gradient-to-r from-orange-500/10 via-amber-500/20 to-cyan-500/10 border border-amber-500/30 text-[8px] font-black uppercase tracking-wider text-amber-300 mb-6 shadow-sm">
+              <span>🔥 TEASING: 2 BESPOKE LEGENDARY SKINS</span>
+              <span>•</span>
+              <span className="text-emerald-400">2% LUCK</span>
+            </div>
+
+            {/* Animated Crate Chest */}
             <motion.div
               animate={isOpening ? {
                 rotate: [-8, 8, -6, 6, -3, 3, 0],
@@ -462,23 +785,34 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
               </div>
             </motion.div>
 
-            {/* Quick Odds & Featured Preview */}
-            <div className="grid grid-cols-2 gap-3 mb-8">
-              <div className="p-3 rounded-2xl bg-white/5 border border-white/10 text-left">
-                <div className="text-[8px] font-black uppercase tracking-wider text-orange-400">Featured Skin 1</div>
+            {/* Featured Legendary Skins Preview */}
+            <div className="grid grid-cols-2 gap-3 mb-6">
+              <div 
+                onClick={() => setInspectItem(ALL_POSSIBLE_REWARDS[0])}
+                className="p-3 rounded-2xl bg-orange-950/30 border border-orange-500/40 text-left cursor-pointer hover:border-orange-400 transition-all group"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[7.5px] font-black uppercase tracking-wider text-orange-400">1.0% Legendary</span>
+                  <Eye size={11} className="text-orange-400/60 group-hover:text-orange-300" />
+                </div>
                 <div className="text-xs font-black text-white mt-0.5">Inferno Dragon</div>
-                <div className="text-[8px] font-mono text-white/40">1.0% Luck</div>
+                <div className="text-[7.5px] text-white/50">Bespoke Volcanic Magma</div>
               </div>
-              <div className="p-3 rounded-2xl bg-white/5 border border-white/10 text-left">
-                <div className="text-[8px] font-black uppercase tracking-wider text-cyan-400">Featured Skin 2</div>
+              <div 
+                onClick={() => setInspectItem(ALL_POSSIBLE_REWARDS[1])}
+                className="p-3 rounded-2xl bg-cyan-950/30 border border-cyan-500/40 text-left cursor-pointer hover:border-cyan-400 transition-all group"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[7.5px] font-black uppercase tracking-wider text-cyan-400">1.0% Legendary</span>
+                  <Eye size={11} className="text-cyan-400/60 group-hover:text-cyan-300" />
+                </div>
                 <div className="text-xs font-black text-white mt-0.5">Cyber Nexus</div>
-                <div className="text-[8px] font-mono text-white/40">1.0% Luck</div>
+                <div className="text-[7.5px] text-white/50">Holographic HUD Matrix</div>
               </div>
             </div>
 
             {/* Opening Buttons */}
             <div className="space-y-3">
-              {/* Option A: Open with Coins */}
               <button
                 disabled={isOpening}
                 onClick={() => handleOpenCrate(false)}
@@ -494,7 +828,6 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
                 )}
               </button>
 
-              {/* Option B: Open with Free Coupon */}
               <button
                 disabled={isOpening || currentCoupons < 1}
                 onClick={() => handleOpenCrate(true)}
@@ -506,8 +839,116 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
               >
                 <span>USE 1 CRATE COUPON</span>
                 <span>🎟️</span>
-                <span className="text-[9px] opacity-75">({currentCoupons} Owned)</span>
+                <span className="text-[9px] opacity-75">({currentCoupons} Available)</span>
               </button>
+            </div>
+          </div>
+
+          {/* ALL VISIBLE REWARDS SHOWCASE SECTION */}
+          <div className="w-full glass-panel p-6 md:p-8 rounded-[2.5rem] border border-white/10 bg-slate-950/70 shadow-2xl">
+            <div className="flex flex-col md:flex-row items-center justify-between gap-4 mb-6">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Trophy size={16} className="text-amber-400" />
+                  <h3 className="text-lg md:text-xl font-black uppercase tracking-tight text-white">
+                    WHAT CAN YOU UNBOX?
+                  </h3>
+                </div>
+                <p className="text-xs text-white/50 mt-0.5">
+                  Browse all 12 potential drops: Legendary skins, coupon scraps, and 20–150 coin caches.
+                </p>
+              </div>
+
+              {/* Filter Tabs */}
+              <div className="flex items-center gap-1.5 p-1 bg-white/5 rounded-xl border border-white/10">
+                <button
+                  onClick={() => setCatalogFilter('all')}
+                  className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase transition-all cursor-pointer ${
+                    catalogFilter === 'all' ? 'bg-amber-500 text-black shadow-sm' : 'text-white/50 hover:text-white'
+                  }`}
+                >
+                  All (12)
+                </button>
+                <button
+                  onClick={() => setCatalogFilter('skins')}
+                  className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase transition-all cursor-pointer ${
+                    catalogFilter === 'skins' ? 'bg-orange-500 text-white shadow-sm' : 'text-white/50 hover:text-white'
+                  }`}
+                >
+                  👑 Skins (2)
+                </button>
+                <button
+                  onClick={() => setCatalogFilter('scraps')}
+                  className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase transition-all cursor-pointer ${
+                    catalogFilter === 'scraps' ? 'bg-purple-500 text-white shadow-sm' : 'text-white/50 hover:text-white'
+                  }`}
+                >
+                  🎟️ Scraps (4)
+                </button>
+                <button
+                  onClick={() => setCatalogFilter('coins')}
+                  className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase transition-all cursor-pointer ${
+                    catalogFilter === 'coins' ? 'bg-emerald-500 text-black shadow-sm' : 'text-white/50 hover:text-white'
+                  }`}
+                >
+                  🪙 Coins (6)
+                </button>
+              </div>
+            </div>
+
+            {/* Grid of All Visible Rewards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3.5">
+              {filteredCatalog.map(item => (
+                <div
+                  key={item.id}
+                  onClick={() => setInspectItem(item)}
+                  className={`glass-panel p-4 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between group hover:scale-[1.02] relative overflow-hidden ${
+                    item.rarity === 'Legendary'
+                      ? 'border-orange-500/50 bg-orange-950/20 hover:border-orange-400 hover:shadow-[0_0_20px_rgba(249,115,22,0.3)]'
+                      : item.rarity === 'Epic'
+                        ? 'border-purple-500/40 bg-purple-950/20 hover:border-purple-400'
+                        : item.rarity === 'Rare'
+                          ? 'border-blue-500/40 bg-blue-950/20 hover:border-blue-400'
+                          : 'border-white/10 bg-white/5 hover:border-white/20'
+                  }`}
+                >
+                  {/* Top Tags */}
+                  <div className="flex items-center justify-between mb-2">
+                    <span className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded border ${item.badgeStyle}`}>
+                      {item.rarity}
+                    </span>
+                    <span className="text-[8px] font-mono font-bold text-amber-400">
+                      {item.dropRate}
+                    </span>
+                  </div>
+
+                  {/* Icon or Card Visual Preview */}
+                  <div className="my-2 flex justify-center items-center h-16">
+                    {item.skinId ? (
+                      <div className="transform scale-[0.52] origin-center pointer-events-none drop-shadow-md">
+                        <CardComponent
+                          card={{ suit: 'spades', rank: 'A', value: 14 }}
+                          skin={item.skinId}
+                        />
+                      </div>
+                    ) : (
+                      <div className="text-3xl md:text-4xl transform group-hover:scale-110 transition-transform">
+                        {item.icon}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Title & Short Details */}
+                  <div className="text-left mt-1">
+                    <div className="text-xs font-black text-white truncate group-hover:text-amber-300 transition-colors">
+                      {item.name}
+                    </div>
+                    <div className="text-[7.5px] text-white/40 line-clamp-1 mt-0.5">
+                      {item.description}
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </div>
@@ -518,7 +959,7 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
         <div className="w-full max-w-4xl z-10">
           <div className="text-center mb-6">
             <h2 className="text-2xl font-black uppercase tracking-tight text-white">CARD SKINS VAULT</h2>
-            <p className="text-xs text-white/50">Equip your owned visual styles or preview exclusive event crate drops.</p>
+            <p className="text-xs text-white/50">Equip your owned visual styles or preview the brand-new handcrafted legendary card skins.</p>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 md:gap-6">
@@ -556,10 +997,16 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
                     {skin.rarity}
                   </span>
 
-                  {/* Card Preview */}
-                  <div className="my-4 pointer-events-none transform hover:scale-105 transition-transform">
+                  {/* Card Face Preview */}
+                  <div className="my-4 pointer-events-none transform hover:scale-105 transition-transform flex items-center justify-center gap-2">
                     <CardComponent
                       card={{ suit: 'spades', rank: 'A', value: 14 }}
+                      skin={skin.id}
+                      className="scale-90"
+                    />
+                    {/* Also show Card Back! */}
+                    <CardComponent
+                      hidden
                       skin={skin.id}
                       className="scale-90"
                     />
@@ -727,6 +1174,62 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
         )}
       </AnimatePresence>
 
+      {/* MODAL: Inspect Showcase Item */}
+      <AnimatePresence>
+        {inspectItem && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 flex items-center justify-center z-[500] p-4 bg-black/85 backdrop-blur-md"
+            onClick={() => setInspectItem(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={e => e.stopPropagation()}
+              className="relative w-full max-w-sm glass-panel p-6 md:p-8 rounded-[2rem] border border-white/20 bg-black/95 text-center"
+            >
+              <div className="text-4xl mb-2">{inspectItem.icon}</div>
+              <div className="inline-block text-[8px] font-black uppercase px-2.5 py-0.5 rounded-full border border-white/20 mb-2">
+                {inspectItem.rarity} • {inspectItem.dropRate} Drop Rate
+              </div>
+              <h3 className="text-xl font-black uppercase text-white mb-2">{inspectItem.name}</h3>
+              <p className="text-xs text-white/60 leading-relaxed mb-6">{inspectItem.description}</p>
+
+              {inspectItem.skinId && (
+                <div className="flex justify-center items-center gap-3 mb-6">
+                  <div className="text-center">
+                    <div className="text-[7.5px] uppercase font-bold text-white/40 mb-1">Face Design</div>
+                    <CardComponent
+                      card={{ suit: 'spades', rank: 'A', value: 14 }}
+                      skin={inspectItem.skinId}
+                      className="scale-90"
+                    />
+                  </div>
+                  <div className="text-center">
+                    <div className="text-[7.5px] uppercase font-bold text-white/40 mb-1">Back Design</div>
+                    <CardComponent
+                      hidden
+                      skin={inspectItem.skinId}
+                      className="scale-90"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <button
+                onClick={() => setInspectItem(null)}
+                className="w-full py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white font-black uppercase text-xs tracking-wider transition-all cursor-pointer"
+              >
+                Close Details
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* MODAL: Drop Probabilities */}
       <AnimatePresence>
         {showOddsModal && (
@@ -750,7 +1253,7 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
               <div className="space-y-3 mb-6">
                 <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between">
                   <div>
-                    <div className="text-xs font-black text-amber-300 uppercase">Card Skins (Legendary)</div>
+                    <div className="text-xs font-black text-amber-300 uppercase">Card Skins (Legendary Tier)</div>
                     <div className="text-[9px] text-white/50">Inferno Dragon (1%) & Cyber Nexus (1%)</div>
                   </div>
                   <div className="text-lg font-black text-amber-400">2.0%</div>
@@ -766,8 +1269,8 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
 
                 <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between">
                   <div>
-                    <div className="text-xs font-black text-emerald-300 uppercase">Bonus Coins</div>
-                    <div className="text-[9px] text-white/50">100, 250, 500, or 1,000 Coins Jackpot</div>
+                    <div className="text-xs font-black text-emerald-300 uppercase">Bonus Coins (20 to 150)</div>
+                    <div className="text-[9px] text-white/50">20, 35, 50, 80, 120, or 150 Coins Jackpot</div>
                   </div>
                   <div className="text-lg font-black text-emerald-400">50.0%</div>
                 </div>
@@ -775,7 +1278,7 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
 
               <button
                 onClick={() => setShowOddsModal(false)}
-                className="w-full py-3.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-black uppercase text-xs tracking-wider transition-all"
+                className="w-full py-3.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-black uppercase text-xs tracking-wider transition-all cursor-pointer"
               >
                 GOT IT
               </button>
@@ -839,13 +1342,13 @@ export const EventsSection: React.FC<EventsSectionProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <button
                   onClick={() => setShowAdminEditModal(false)}
-                  className="py-3 rounded-xl bg-white/5 text-white/50 hover:bg-white/10 font-black uppercase text-xs"
+                  className="py-3 rounded-xl bg-white/5 text-white/50 hover:bg-white/10 font-black uppercase text-xs cursor-pointer"
                 >
                   CANCEL
                 </button>
                 <button
                   onClick={saveAdminAnnouncement}
-                  className="py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black uppercase text-xs shadow-lg"
+                  className="py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black uppercase text-xs shadow-lg cursor-pointer"
                 >
                   SAVE & BROADCAST
                 </button>

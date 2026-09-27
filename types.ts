@@ -49,6 +49,8 @@ export interface UserProfile {
   role: 'admin' | 'user';
   friends: Friend[];
   usernameLastChangedAt?: number;
+  dailyStreak?: number;
+  lastLoginBonusDate?: string;
 }
 
 export interface EventAnnouncement {
