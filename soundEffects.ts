@@ -10,7 +10,15 @@ class SoundEffectManager {
   private masterGain: number = 0.8;
 
   constructor() {
-    // Lazily initialized on first user gesture to comply with browser autoplay policies
+    // Restore persistent muted preference
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem('turab_sound_muted');
+        if (stored !== null) {
+          this.isMuted = stored === 'true';
+        }
+      } catch (e) {}
+    }
   }
 
   private getAudioContext(): AudioContext | null {
@@ -29,6 +37,16 @@ class SoundEffectManager {
 
   public setMuted(muted: boolean) {
     this.isMuted = muted;
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('turab_sound_muted', String(muted));
+      } catch (e) {}
+    }
+  }
+
+  public toggleMute(): boolean {
+    this.setMuted(!this.isMuted);
+    return this.isMuted;
   }
 
   public getMuted(): boolean {

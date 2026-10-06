@@ -33,43 +33,18 @@ import { toast, Toaster } from 'sonner';
 import { auth, db } from './firebase';
 import { Card, GameState, Player, Suit, SUITS, RANKS, RANK_VALUES, UserProfile, AppView, GameMode, Friend, FriendRequest, MatchHistoryEntry } from './types';
 import CardComponent from './components/CardComponent';
-import { Pencil, Clock, Camera, History, RefreshCw, Swords, HelpCircle } from 'lucide-react';
+import { Pencil, Clock, Camera, History, RefreshCw, Swords, HelpCircle, Volume2, VolumeX } from 'lucide-react';
 import { soundEffects } from './soundEffects';
 import VictoryCelebrationOverlay from './components/VictoryCelebrationOverlay';
 import { triggerVictoryConfetti } from './confettiCelebration';
 import EventsSection from './components/EventsSection';
 import DailyLoginBonusModal, { evaluateDailyBonusStatus } from './components/DailyLoginBonusModal';
+import TutorialModal, { TUTORIAL_PAGES } from './components/TutorialModal';
+import LeaderboardSection from './components/LeaderboardSection';
 
 const INITIAL_COINS = 500;
 const STAKE_AMOUNT = 200;
 const APP_VERSION = '1.3.3';
-
-const TUTORIAL_PAGES = [
-  {
-    title: "Court Piece: The Grand Arena",
-    subtitle: "The Goal of the Game",
-    icon: "👑",
-    content: "Court Piece is a partnership card game for 4 players. You are paired with the player opposite to you (Players 0 & 2 vs Players 1 & 3).\n\nYour shared goal is simple: win at least 7 / 13 tricks in a round to secure victory!"
-  },
-  {
-    title: "Double Sar: Two Consecutive Wins",
-    subtitle: "The Core Mechanic of our Table",
-    icon: "⚔️",
-    content: "Unlike standard games, individual tricks won in progress are NOT immediately taken by players.\n\nThey stay piled in the center! The piled cards are only picked up when a single player wins TWO consecutive tricks in a row.\n\nThis player wins the entire 'Sar' (Center Pile) for their team!"
-  },
-  {
-    title: "Trump & The Rule of the First Streak",
-    subtitle: "Trump reveals & double wins",
-    icon: "⚡",
-    content: "• No player can win or claim the center pile BEFORE Trump is announced or revealed.\n• The trick on which the Trump is announced/revealed counts as Consecutive Win #1 for its winner!\n• If this winner manages to win the very next trick consecutively, they instantly claim the entire pile!"
-  },
-  {
-    title: "Card Rank & Following Suit",
-    subtitle: "Basic Mechanics & Flow",
-    icon: "🃏",
-    content: "• Aces are the highest card, then King, Queen, Jack, down to 2 which is lowest.\n• You MUST follow the lead suit of the trick if you have it.\n• If you don't have the lead suit, you can play a Trump card to 'ruff' and steal the trick, or play anything else to discard."
-  }
-];
 
 enum OperationType {
   CREATE = 'create',
@@ -452,7 +427,19 @@ const App: React.FC = () => {
   const [isExitConfirmOpen, setIsExitConfirmOpen] = useState(false);
   const [matchStartTime, setMatchStartTime] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState<number>(Date.now());
-  const [isSfxMuted, setIsSfxMuted] = useState(false);
+  const [isSfxMuted, setIsSfxMuted] = useState(() => soundEffects.getMuted());
+
+  const toggleSoundMute = useCallback(() => {
+    setIsSfxMuted(prev => {
+      const next = !prev;
+      soundEffects.setMuted(next);
+      if (!next) soundEffects.playCard();
+      toast(next ? "🔇 Sound effects muted (Playing silently)" : "🔊 Sound effects enabled", {
+        duration: 1800
+      });
+      return next;
+    });
+  }, []);
 
   // Track live timer tick for active game pre-leave window (2 minutes / 120 seconds)
   useEffect(() => {
@@ -3517,6 +3504,38 @@ const App: React.FC = () => {
                 </div>
               </motion.button>
 
+              {/* Champions Leaderboard Button */}
+              <motion.button
+                whileHover={{ y: -2 }}
+                onClick={() => {
+                  soundEffects.playCard();
+                  setView('leaderboard');
+                }}
+                className="w-full py-3.5 px-4 rounded-2xl glass-panel border border-amber-500/30 bg-gradient-to-r from-amber-500/15 via-yellow-500/10 to-transparent hover:border-amber-400/60 hover:bg-amber-500/20 transition-all flex items-center justify-between cursor-pointer group shadow-md"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300 text-sm shadow-sm group-hover:scale-110 transition-transform">
+                    🏆
+                  </div>
+                  <div className="text-left">
+                    <div className="text-[7.5px] font-black uppercase tracking-wider text-amber-400">
+                      HALL OF FAME
+                    </div>
+                    <div className="text-xs font-black text-white group-hover:text-amber-200 transition-colors flex items-center gap-1.5">
+                      <span>Champions Leaderboard</span>
+                      <span className="px-1.5 py-0.2 rounded bg-amber-400/20 border border-amber-400/30 text-[7px] text-amber-300 font-bold uppercase">
+                        TOP 10
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 text-amber-400 group-hover:translate-x-0.5 transition-transform text-xs font-black">
+                  <span>VIEW</span>
+                  <span>→</span>
+                </div>
+              </motion.button>
+
               {/* Friends & Free Coins */}
               <div className="grid grid-cols-2 gap-3">
                 <motion.button 
@@ -3867,93 +3886,12 @@ const App: React.FC = () => {
             )}
           </AnimatePresence>
 
-          {/* How to Play Tutorial Modal */}
-          <AnimatePresence>
-            {isTutorialOpen && (
-              <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 flex items-center justify-center z-[300] p-4"
-              >
-                <motion.div 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  onClick={() => setIsTutorialOpen(false)}
-                  className="absolute inset-0 bg-black/85 backdrop-blur-md"
-                />
-                <motion.div 
-                  initial={{ scale: 0.9, opacity: 0, y: 20 }}
-                  animate={{ scale: 1, opacity: 1, y: 0 }}
-                  exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                  className="relative w-full max-w-md glass-panel p-8 rounded-[2.5rem] border-white/20 shadow-2xl z-[301] text-left mx-auto flex flex-col"
-                >
-                  <button 
-                    onClick={() => setIsTutorialOpen(false)}
-                    className="absolute top-6 right-6 w-8 h-8 rounded-full border border-white/10 hover:border-white/30 hover:bg-white/5 flex items-center justify-center transition-all text-xs font-black text-white/45"
-                  >
-                    ✕
-                  </button>
-
-                  <div className="flex items-center gap-4 mb-4">
-                    <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-2xl">
-                      {TUTORIAL_PAGES[tutorialPage].icon}
-                    </div>
-                    <div>
-                      <h2 className="text-xl font-black uppercase tracking-tight text-indigo-400">{TUTORIAL_PAGES[tutorialPage].title}</h2>
-                      <p className="text-[10px] font-black text-white/30 uppercase">{TUTORIAL_PAGES[tutorialPage].subtitle}</p>
-                    </div>
-                  </div>
-
-                  {/* Divider */}
-                  <div className="h-px bg-white/5 my-4" />
-
-                  {/* Body Text */}
-                  <div className="text-[12px] font-semibold text-white/70 leading-relaxed whitespace-pre-wrap min-h-[140px]">
-                    {TUTORIAL_PAGES[tutorialPage].content}
-                  </div>
-
-                  {/* Progress Indicator */}
-                  <div className="flex justify-center gap-1.5 my-6">
-                    {TUTORIAL_PAGES.map((_, i) => (
-                      <button 
-                        key={`tutorial-dot-${i}`} 
-                        onClick={() => setTutorialPage(i)}
-                        className={`h-1 rounded-full transition-all duration-300 ${i === tutorialPage ? 'w-6 bg-indigo-500' : 'w-2 bg-white/10 hover:bg-white/20'}`}
-                      />
-                    ))}
-                  </div>
-
-                  {/* Modal Footer Controls */}
-                  <div className="grid grid-cols-2 gap-4 mt-2">
-                    <button 
-                      onClick={() => setTutorialPage(prev => Math.max(0, prev - 1))}
-                      disabled={tutorialPage === 0}
-                      className="py-4 rounded-2xl bg-white/5 border border-white/10 text-[10px] font-black uppercase text-white/60 hover:bg-white/10 disabled:opacity-30 transition-all"
-                    >
-                      Back
-                    </button>
-                    {tutorialPage < TUTORIAL_PAGES.length - 1 ? (
-                      <button 
-                        onClick={() => setTutorialPage(prev => Math.min(TUTORIAL_PAGES.length - 1, prev + 1))}
-                        className="gold-button py-4 rounded-2xl text-[10px]"
-                      >
-                        Next
-                      </button>
-                    ) : (
-                      <button 
-                        onClick={() => setIsTutorialOpen(false)}
-                        className="gold-button py-4 rounded-2xl text-[10px]"
-                      >
-                        Got It!
-                      </button>
-                    )}
-                  </div>
-                </motion.div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+          {/* Enhanced How to Play Tutorial Modal (Swipe on mobile & Keyboard Arrow Navigation on desktop) */}
+          <TutorialModal
+            isOpen={isTutorialOpen}
+            onClose={() => setIsTutorialOpen(false)}
+            initialPage={tutorialPage}
+          />
         </motion.div>
       );
     }
@@ -3964,6 +3902,15 @@ const App: React.FC = () => {
           profile={profile}
           setProfile={setProfile}
           syncProfileToCloud={syncProfileToCloud}
+          onBack={() => setView('home')}
+        />
+      );
+    }
+
+    if (view === 'leaderboard') {
+      return (
+        <LeaderboardSection
+          currentProfile={profile}
           onBack={() => setView('home')}
         />
       );
@@ -4053,17 +4000,15 @@ const App: React.FC = () => {
             </div>
           )}
           <button 
-            onClick={() => {
-              const nextMuted = !isSfxMuted;
-              setIsSfxMuted(nextMuted);
-              soundEffects.setMuted(nextMuted);
-              if (!nextMuted) soundEffects.playCard();
-              toast.info(nextMuted ? "Sound effects muted" : "Sound effects enabled");
-            }} 
-            className={`glass-panel w-10 h-10 rounded-full flex items-center justify-center transition-all ${isSfxMuted ? 'text-white/30 border-white/5' : 'text-yellow-400 border-yellow-500/30 bg-yellow-500/10 shadow-[0_0_12px_rgba(234,179,8,0.2)]'}`}
-            title={isSfxMuted ? "Unmute Card Sound Effects" : "Mute Card Sound Effects"}
+            onClick={toggleSoundMute} 
+            className={`glass-panel w-10 h-10 rounded-full flex items-center justify-center transition-all cursor-pointer ${
+              isSfxMuted 
+                ? 'text-rose-400 border-rose-500/30 bg-rose-950/20 shadow-[0_0_12px_rgba(244,63,94,0.2)]' 
+                : 'text-amber-400 border-amber-500/30 bg-yellow-500/10 shadow-[0_0_12px_rgba(234,179,8,0.2)]'
+            }`}
+            title={isSfxMuted ? "Unmute Sound Effects" : "Mute Sound Effects (Play Silently)"}
           >
-            {isSfxMuted ? '🔇' : '🎵'}
+            {isSfxMuted ? <VolumeX size={17} /> : <Volume2 size={17} />}
           </button>
           <button onClick={toggleMic} className={`glass-panel w-10 h-10 rounded-full flex items-center justify-center transition-all ${isMicActive ? 'mic-active' : 'text-white/50'}`}>
             {isMicActive ? '🎤' : '🎙️'}
@@ -5354,8 +5299,8 @@ const App: React.FC = () => {
 
         {view === 'home' && (
           <>
-            {/* Top-Left: Sleek, compact How To Play button */}
-            <div className="fixed top-3 left-4 z-[9999]">
+            {/* Top-Left: Sleek, compact How To Play & Sound Mute Toggle buttons */}
+            <div className="fixed top-3 left-4 z-[9999] flex items-center gap-2">
               <motion.button
                 whileHover={{ scale: 1.08 }}
                 whileTap={{ scale: 0.94 }}
@@ -5368,6 +5313,24 @@ const App: React.FC = () => {
                 title="How To Play (Tutorial & Rules)"
               >
                 <HelpCircle size={13} className="group-hover:rotate-12 transition-transform text-white/60 group-hover:text-amber-300" />
+              </motion.button>
+
+              <motion.button
+                whileHover={{ scale: 1.08 }}
+                whileTap={{ scale: 0.94 }}
+                onClick={toggleSoundMute}
+                className={`w-7 h-7 rounded-full border flex items-center justify-center transition-all cursor-pointer shadow-sm pointer-events-auto group ${
+                  isSfxMuted
+                    ? 'border-rose-500/40 bg-rose-950/40 text-rose-400 hover:bg-rose-900/50 shadow-[0_0_10px_rgba(244,63,94,0.3)]'
+                    : 'border-white/15 bg-black/40 text-white/50 hover:text-amber-300 hover:border-amber-400/50'
+                }`}
+                title={isSfxMuted ? "Unmute Sound Effects" : "Mute Sound Effects (Play Silently)"}
+              >
+                {isSfxMuted ? (
+                  <VolumeX size={13} className="text-rose-400" />
+                ) : (
+                  <Volume2 size={13} className="text-white/60 group-hover:text-amber-300" />
+                )}
               </motion.button>
             </div>
 

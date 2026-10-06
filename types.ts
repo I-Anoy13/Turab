@@ -73,7 +73,7 @@ export interface EventAnnouncement {
 }
 
 export type GameMode = 'classic' | 'private' | 'join';
-export type AppView = 'login' | 'home' | 'game' | 'searching' | 'crate' | 'missions' | 'lobby' | 'events';
+export type AppView = 'login' | 'home' | 'game' | 'searching' | 'crate' | 'missions' | 'lobby' | 'events' | 'leaderboard';
 
 export interface FriendRequest {
   id: string;
